@@ -1,0 +1,71 @@
+{
+  "models": {
+    "nemotron-router": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://10.10.10.2:44443",
+      "api-key": null
+    }
+  },
+
+  "architecture": [
+    {
+      "name": "router-layer",
+      "layer": 0,
+      "model": "nemotron-router",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": [1],
+      "extra-options": {
+        "UseHeaderKeys": ["OutputCustomKey"]
+      }
+    },
+
+    {
+      "name": "company-2024-q3-fine-tune",
+      "layer": 1,
+      "adapter": "openai-api",
+      "use-case": "If the query is about company information during 2024 Q3",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8081",
+      "output-to": ["final-output"],
+      "extra-options": {}
+    },
+
+    {
+      "name": "company-2024-q4-fine-tune",
+      "layer": 1,
+      "adapter": "openai-api",
+      "use-case": "If the query is about company information during 2024 Q4",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8082",
+      "output-to": ["final-output", "company-2024-q4-edge-case"],
+      "extra-options": {}
+    },
+
+    {
+      "name": "company-2024-q4-edge-case",
+      "layer": 2,
+      "adapter": "openai-api",
+      "use-case": "If the Q4 response indicates an edge case needing specialized processing",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8083",
+      "output-to": ["final-output"],
+      "extra-options": {}
+    },
+
+    {
+      "name": "final-output",
+      "adapter": "output"
+    },
+
+    {
+      "name": "output-to-ws",
+      "if": "$OutputCustomKey",
+      "adapter": "ws",
+      "url": "ws://localhost:3000",
+      "extra-options": {}
+    }
+  ]
+}
