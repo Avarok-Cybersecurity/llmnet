@@ -91,8 +91,16 @@ pub async fn chat_completions(
         .map(|m| m.content.clone())
         .unwrap_or_default();
 
-    // For now, return a placeholder response
-    // In a full implementation, this would process through the pipeline
+    // Process through the pipeline if processor is available
+    let content = if let Some(processor) = &state.processor {
+        match processor.process(&user_prompt).await {
+            Ok(response) => response,
+            Err(e) => format!("Pipeline error: {}", e),
+        }
+    } else {
+        format!("No pipeline processor configured for: {}", user_prompt)
+    };
+
     let response = ChatCompletionResponse {
         id: format!("chatcmpl-{}", request_id),
         object: "chat.completion".to_string(),
@@ -102,7 +110,7 @@ pub async fn chat_completions(
             index: 0,
             message: Message {
                 role: "assistant".to_string(),
-                content: format!("Pipeline processing for: {}", user_prompt),
+                content,
             },
             finish_reason: "stop".to_string(),
         }],

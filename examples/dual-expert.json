@@ -1,0 +1,57 @@
+{
+  "models": {
+    "router": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://localhost:8000",
+      "api-key": null
+    },
+    "sales-llm": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://localhost:8001",
+      "api-key": null
+    },
+    "support-llm": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://localhost:8002",
+      "api-key": null
+    }
+  },
+  "architecture": [
+    {
+      "name": "router",
+      "layer": 0,
+      "model": "router",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": [1]
+    },
+    {
+      "name": "sales-expert",
+      "layer": 1,
+      "model": "sales-llm",
+      "adapter": "openai-api",
+      "use-case": "Product questions, pricing, recommendations, availability, purchasing decisions",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8081",
+      "output-to": ["output"]
+    },
+    {
+      "name": "support-expert",
+      "layer": 1,
+      "model": "support-llm",
+      "adapter": "openai-api",
+      "use-case": "Order status, shipping issues, returns, refunds, complaints, account problems",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8082",
+      "output-to": ["output"]
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}

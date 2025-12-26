@@ -1,0 +1,66 @@
+{
+  "models": {
+    "router-gemma": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    },
+    "handler-llama": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    },
+    "handler-mistral": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    }
+  },
+  "architecture": [
+    {
+      "name": "router",
+      "layer": 0,
+      "model": "router-gemma",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": [1],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "creative-handler",
+      "layer": 1,
+      "model": "handler-llama",
+      "adapter": "openai-api",
+      "use-case": "Creative writing, storytelling, poetry, and artistic content",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8081",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "meta-llama/llama-3.3-70b-instruct:free"
+      }
+    },
+    {
+      "name": "technical-handler",
+      "layer": 1,
+      "model": "handler-mistral",
+      "adapter": "openai-api",
+      "use-case": "Technical questions, coding, math, science, and factual queries",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8082",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "qwen/qwen3-coder:free"
+      }
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}

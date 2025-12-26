@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use uuid::Uuid;
 
 use crate::config::Composition;
-use crate::runtime::{PipelineRequest, RuntimeNode};
+use crate::runtime::{PipelineProcessor, PipelineRequest, RuntimeNode};
 
 /// Shared application state
 #[derive(Clone)]
@@ -12,6 +12,7 @@ pub struct AppState {
     pub composition: Arc<Composition>,
     pub nodes: Arc<DashMap<String, RuntimeNode>>,
     pub active_requests: Arc<DashMap<Uuid, PipelineRequest>>,
+    pub processor: Option<Arc<PipelineProcessor>>,
 }
 
 impl AppState {
@@ -32,10 +33,14 @@ impl AppState {
             port_offset += 1;
         }
 
+        // Create pipeline processor
+        let processor = PipelineProcessor::new(&composition).ok().map(Arc::new);
+
         Self {
             composition: Arc::new(composition),
             nodes,
             active_requests: Arc::new(DashMap::new()),
+            processor,
         }
     }
 
