@@ -1,0 +1,25 @@
+{
+  "models": {
+    "chatbot": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://localhost:11434",
+      "api-key": null
+    }
+  },
+  "architecture": [
+    {
+      "name": "chat",
+      "layer": 0,
+      "model": "chatbot",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": ["output"]
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}
