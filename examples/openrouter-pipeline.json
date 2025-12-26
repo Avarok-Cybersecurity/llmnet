@@ -29,7 +29,7 @@
       "bind-port": "8080",
       "output-to": [1],
       "extra-options": {
-        "model_override": "google/gemma-2-9b-it:free"
+        "model_override": "google/gemma-3-27b-it:free"
       }
     },
     {
@@ -42,7 +42,7 @@
       "bind-port": "8081",
       "output-to": ["output"],
       "extra-options": {
-        "model_override": "meta-llama/llama-3.2-3b-instruct:free"
+        "model_override": "meta-llama/llama-3.3-70b-instruct:free"
       }
     },
     {
@@ -55,7 +55,7 @@
       "bind-port": "8082",
       "output-to": ["output"],
       "extra-options": {
-        "model_override": "mistralai/mistral-7b-instruct:free"
+        "model_override": "qwen/qwen3-coder:free"
       }
     },
     {
