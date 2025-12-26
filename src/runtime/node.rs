@@ -90,18 +90,27 @@ impl RuntimeNode {
 // SBIO: Pure function for condition evaluation
 // ============================================================================
 
-/// Evaluate a condition expression against headers.
+/// Evaluate a condition expression against variables.
 /// Pure function - no I/O.
+///
+/// Supported operators:
+/// - `$VarName` - checks variable exists and is non-empty
+/// - `$VarName == "value"` - string equality
+/// - `$VarName != "value"` - string inequality
+/// - `$VarName > value` - numeric greater than
+/// - `$VarName < value` - numeric less than
+/// - `$VarName >= value` - numeric greater than or equal
+/// - `$VarName <= value` - numeric less than or equal
 pub fn evaluate_condition(
     condition: &str,
-    headers: &std::collections::HashMap<String, String>,
+    variables: &std::collections::HashMap<String, String>,
 ) -> bool {
     let condition = condition.trim();
 
     // Handle simple variable existence check: "$VarName"
     if condition.starts_with('$') && !condition.contains(' ') {
         let var_name = &condition[1..];
-        return headers.get(var_name).map(|v| !v.is_empty()).unwrap_or(false);
+        return variables.get(var_name).map(|v| !v.is_empty()).unwrap_or(false);
     }
 
     // Handle equality: "$VarName == \"value\""
@@ -113,7 +122,7 @@ pub fn evaluate_condition(
 
             if var_part.starts_with('$') {
                 let var_name = &var_part[1..];
-                return headers.get(var_name).map(|v| v == val_part).unwrap_or(false);
+                return variables.get(var_name).map(|v| v == val_part).unwrap_or(false);
             }
         }
     }
@@ -127,13 +136,70 @@ pub fn evaluate_condition(
 
             if var_part.starts_with('$') {
                 let var_name = &var_part[1..];
-                return headers.get(var_name).map(|v| v != val_part).unwrap_or(true);
+                return variables.get(var_name).map(|v| v != val_part).unwrap_or(true);
             }
         }
     }
 
+    // Handle numeric comparisons: >=, <=, >, <
+    // Check >= and <= before > and < to avoid partial matches
+    if let Some(result) = try_numeric_comparison(condition, ">=", variables, |a, b| a >= b) {
+        return result;
+    }
+    if let Some(result) = try_numeric_comparison(condition, "<=", variables, |a, b| a <= b) {
+        return result;
+    }
+    if let Some(result) = try_numeric_comparison(condition, ">", variables, |a, b| a > b) {
+        return result;
+    }
+    if let Some(result) = try_numeric_comparison(condition, "<", variables, |a, b| a < b) {
+        return result;
+    }
+
     // Default: condition passes if we can't parse it
     true
+}
+
+/// Helper to parse and evaluate numeric comparisons
+fn try_numeric_comparison<F>(
+    condition: &str,
+    operator: &str,
+    variables: &std::collections::HashMap<String, String>,
+    compare: F,
+) -> Option<bool>
+where
+    F: Fn(f64, f64) -> bool,
+{
+    if !condition.contains(operator) {
+        return None;
+    }
+
+    // Avoid matching >= when looking for > (and <= for <)
+    if operator == ">" && condition.contains(">=") {
+        return None;
+    }
+    if operator == "<" && condition.contains("<=") {
+        return None;
+    }
+
+    let parts: Vec<&str> = condition.splitn(2, operator).collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let var_part = parts[0].trim();
+    let val_part = parts[1].trim();
+
+    if !var_part.starts_with('$') {
+        return None;
+    }
+
+    let var_name = &var_part[1..];
+    let var_value = variables.get(var_name)?;
+    let var_num: f64 = var_value.parse().ok()?;
+    let cmp_num: f64 = val_part.parse().ok()?;
+
+    Some(compare(var_num, cmp_num))
 }
 
 #[cfg(test)]
@@ -216,36 +282,143 @@ mod tests {
 
     #[test]
     fn test_evaluate_condition_existence() {
-        let mut headers = HashMap::new();
-        headers.insert("MyKey".to_string(), "some-value".to_string());
+        let mut vars = HashMap::new();
+        vars.insert("MyKey".to_string(), "some-value".to_string());
 
-        assert!(evaluate_condition("$MyKey", &headers));
-        assert!(!evaluate_condition("$NonExistent", &headers));
+        assert!(evaluate_condition("$MyKey", &vars));
+        assert!(!evaluate_condition("$NonExistent", &vars));
     }
 
     #[test]
     fn test_evaluate_condition_empty_value() {
-        let mut headers = HashMap::new();
-        headers.insert("EmptyKey".to_string(), "".to_string());
+        let mut vars = HashMap::new();
+        vars.insert("EmptyKey".to_string(), "".to_string());
 
-        assert!(!evaluate_condition("$EmptyKey", &headers));
+        assert!(!evaluate_condition("$EmptyKey", &vars));
     }
 
     #[test]
     fn test_evaluate_condition_equality() {
-        let mut headers = HashMap::new();
-        headers.insert("Mode".to_string(), "test".to_string());
+        let mut vars = HashMap::new();
+        vars.insert("Mode".to_string(), "test".to_string());
 
-        assert!(evaluate_condition("$Mode == \"test\"", &headers));
-        assert!(!evaluate_condition("$Mode == \"prod\"", &headers));
+        assert!(evaluate_condition("$Mode == \"test\"", &vars));
+        assert!(!evaluate_condition("$Mode == \"prod\"", &vars));
     }
 
     #[test]
     fn test_evaluate_condition_inequality() {
-        let mut headers = HashMap::new();
-        headers.insert("Mode".to_string(), "test".to_string());
+        let mut vars = HashMap::new();
+        vars.insert("Mode".to_string(), "test".to_string());
 
-        assert!(evaluate_condition("$Mode != \"prod\"", &headers));
-        assert!(!evaluate_condition("$Mode != \"test\"", &headers));
+        assert!(evaluate_condition("$Mode != \"prod\"", &vars));
+        assert!(!evaluate_condition("$Mode != \"test\"", &vars));
+    }
+
+    // ========================================================================
+    // Numeric Comparison Operator Tests
+    // ========================================================================
+
+    #[test]
+    fn test_evaluate_condition_greater_than() {
+        let mut vars = HashMap::new();
+        vars.insert("HOP_COUNT".to_string(), "5".to_string());
+
+        assert!(evaluate_condition("$HOP_COUNT > 3", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT > 5", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT > 10", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_less_than() {
+        let mut vars = HashMap::new();
+        vars.insert("HOP_COUNT".to_string(), "5".to_string());
+
+        assert!(evaluate_condition("$HOP_COUNT < 10", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT < 5", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT < 3", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_greater_than_or_equal() {
+        let mut vars = HashMap::new();
+        vars.insert("HOP_COUNT".to_string(), "5".to_string());
+
+        assert!(evaluate_condition("$HOP_COUNT >= 5", &vars));
+        assert!(evaluate_condition("$HOP_COUNT >= 3", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT >= 10", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_less_than_or_equal() {
+        let mut vars = HashMap::new();
+        vars.insert("HOP_COUNT".to_string(), "5".to_string());
+
+        assert!(evaluate_condition("$HOP_COUNT <= 5", &vars));
+        assert!(evaluate_condition("$HOP_COUNT <= 10", &vars));
+        assert!(!evaluate_condition("$HOP_COUNT <= 3", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_float_comparison() {
+        let mut vars = HashMap::new();
+        vars.insert("SCORE".to_string(), "3.5".to_string());
+
+        assert!(evaluate_condition("$SCORE > 3.0", &vars));
+        assert!(evaluate_condition("$SCORE < 4.0", &vars));
+        assert!(evaluate_condition("$SCORE >= 3.5", &vars));
+        assert!(evaluate_condition("$SCORE <= 3.5", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_input_length() {
+        let mut vars = HashMap::new();
+        vars.insert("INPUT_LENGTH".to_string(), "100".to_string());
+
+        assert!(evaluate_condition("$INPUT_LENGTH > 50", &vars));
+        assert!(evaluate_condition("$INPUT_LENGTH < 200", &vars));
+        assert!(evaluate_condition("$INPUT_LENGTH >= 100", &vars));
+        assert!(evaluate_condition("$INPUT_LENGTH <= 100", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_word_count() {
+        let mut vars = HashMap::new();
+        vars.insert("WORD_COUNT".to_string(), "15".to_string());
+
+        assert!(evaluate_condition("$WORD_COUNT > 10", &vars));
+        assert!(!evaluate_condition("$WORD_COUNT > 20", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_non_numeric_fails_gracefully() {
+        let mut vars = HashMap::new();
+        vars.insert("NAME".to_string(), "hello".to_string());
+
+        // Non-numeric comparisons should return true (default pass)
+        assert!(evaluate_condition("$NAME > 5", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_missing_var_numeric() {
+        let vars = HashMap::new();
+
+        // Missing variable with numeric comparison returns true (default pass)
+        assert!(evaluate_condition("$MISSING > 5", &vars));
+    }
+
+    #[test]
+    fn test_evaluate_condition_edge_cases() {
+        let mut vars = HashMap::new();
+        vars.insert("ZERO".to_string(), "0".to_string());
+        vars.insert("NEGATIVE".to_string(), "-5".to_string());
+
+        assert!(evaluate_condition("$ZERO >= 0", &vars));
+        assert!(evaluate_condition("$ZERO <= 0", &vars));
+        assert!(!evaluate_condition("$ZERO > 0", &vars));
+        assert!(!evaluate_condition("$ZERO < 0", &vars));
+
+        assert!(evaluate_condition("$NEGATIVE < 0", &vars));
+        assert!(evaluate_condition("$NEGATIVE > -10", &vars));
     }
 }

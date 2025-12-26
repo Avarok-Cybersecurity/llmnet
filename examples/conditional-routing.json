@@ -1,0 +1,75 @@
+{
+  "models": {
+    "router": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    },
+    "handler": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    }
+  },
+  "architecture": [
+    {
+      "name": "router",
+      "layer": 0,
+      "model": "router",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": [1],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "short-input-handler",
+      "layer": 1,
+      "model": "handler",
+      "adapter": "openai-api",
+      "use-case": "Quick responses for short, simple inputs under 10 words",
+      "if": "$WORD_COUNT < 10",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8081",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "long-input-handler",
+      "layer": 1,
+      "model": "handler",
+      "adapter": "openai-api",
+      "use-case": "Detailed responses for longer, complex inputs of 10+ words",
+      "if": "$WORD_COUNT >= 10",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8082",
+      "output-to": [2],
+      "extra-options": {
+        "model_override": "meta-llama/llama-3.3-70b-instruct:free"
+      }
+    },
+    {
+      "name": "response-refiner",
+      "layer": 2,
+      "model": "handler",
+      "adapter": "openai-api",
+      "use-case": "Polish and refine long-form responses for clarity",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8083",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}

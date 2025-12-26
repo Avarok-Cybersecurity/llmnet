@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::client::{ChatCompletionRequest as ClientRequest, Message, OpenAiClient, OpenAiClientTrait};
 use crate::config::{Composition, ModelDefinition, OutputTarget};
-use crate::runtime::node::RuntimeNode;
+use crate::runtime::node::{evaluate_condition, RuntimeNode};
+use crate::runtime::request::PipelineRequest;
 use crate::runtime::router::{build_routing_prompt, extract_node_selection, NodeMetadata};
 
 #[derive(Error, Debug)]
@@ -97,31 +98,33 @@ impl PipelineProcessor {
 
     /// Process a user message through the pipeline
     pub async fn process(&self, user_message: &str) -> Result<String, ProcessorError> {
-        let mut current_content = user_message.to_string();
+        let mut request = PipelineRequest::new(user_message.to_string());
         let mut current_node_name = self.router_node_name.clone();
-        let mut hop_count = 0;
         const MAX_HOPS: usize = 10;
 
         loop {
+            let hop_count: usize = request.trace.len();
             if hop_count >= MAX_HOPS {
                 return Err(ProcessorError::ApiError(format!(
                     "Maximum hops ({}) exceeded",
                     MAX_HOPS
                 )));
             }
-            hop_count += 1;
 
             let current_node = self
                 .nodes
                 .get(&current_node_name)
                 .ok_or_else(|| ProcessorError::HandlerNotFound(current_node_name.clone()))?;
 
-            // Determine next targets
-            let next_targets = self.get_next_targets(current_node)?;
+            // Set current layer for condition evaluation
+            request.set_current_layer(current_node.layer);
+
+            // Determine next targets, filtering by conditions
+            let next_targets = self.get_next_targets_filtered(current_node, &request)?;
 
             // If multiple targets, we need to route
             let selected_target = if next_targets.len() > 1 {
-                self.route_to_target(&current_node_name, &current_content, &next_targets)
+                self.route_to_target(&current_node_name, &request.current_content, &next_targets)
                     .await?
             } else if next_targets.len() == 1 {
                 next_targets[0].clone()
@@ -132,12 +135,18 @@ impl PipelineProcessor {
             // Check if we've reached output
             if let Some(target_node) = self.nodes.get(&selected_target) {
                 if target_node.is_output() {
-                    return Ok(current_content);
+                    request.add_hop(selected_target.clone(), target_node.layer, None);
+                    return Ok(request.current_content);
                 }
             }
 
+            // Record the hop before calling LLM
+            let target_layer = self.nodes.get(&selected_target).map(|n| n.layer).unwrap_or(0);
+            request.add_hop(selected_target.clone(), target_layer, Some(selected_target.clone()));
+
             // Call the selected node's LLM
-            current_content = self.call_node_llm(&selected_target, &current_content).await?;
+            let new_content = self.call_node_llm(&selected_target, &request.current_content).await?;
+            request.set_content(new_content);
             current_node_name = selected_target;
         }
     }
@@ -175,6 +184,40 @@ impl PipelineProcessor {
             None => Err(ProcessorError::ApiError(
                 "Node has no output targets".to_string(),
             )),
+        }
+    }
+
+    /// Get next targets filtered by condition evaluation
+    fn get_next_targets_filtered(
+        &self,
+        node: &RuntimeNode,
+        request: &PipelineRequest,
+    ) -> Result<Vec<String>, ProcessorError> {
+        let all_targets = self.get_next_targets(node)?;
+
+        // Filter targets by their conditions
+        let filtered: Vec<String> = all_targets
+            .into_iter()
+            .filter(|target_name| {
+                if let Some(target_node) = self.nodes.get(target_name) {
+                    // If node has a condition, evaluate it; otherwise pass
+                    target_node
+                        .condition
+                        .as_ref()
+                        .map(|c| evaluate_condition(c, request.get_variables()))
+                        .unwrap_or(true)
+                } else {
+                    true // Node not found, let later code handle error
+                }
+            })
+            .collect();
+
+        // If all targets were filtered out by conditions, return all targets
+        // This prevents getting stuck - conditions act as preferences, not blockers
+        if filtered.is_empty() {
+            self.get_next_targets(node)
+        } else {
+            Ok(filtered)
         }
     }
 
@@ -578,5 +621,323 @@ mod tests {
         // Check layer 2 has 2 nodes
         let layer2_count = processor.nodes.values().filter(|n| n.layer == 2).count();
         assert_eq!(layer2_count, 2);
+    }
+
+    // ========================================================================
+    // Conditional Routing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_condition_filters_targets_by_word_count() {
+        // Test that conditions on WORD_COUNT correctly filter targets
+        let json = r#"{
+            "models": {
+                "model": {
+                    "type": "external",
+                    "interface": "openai-api",
+                    "url": "http://localhost:8080"
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "output-to": [1]
+                },
+                {
+                    "name": "short-handler",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Handle short inputs",
+                    "if": "$WORD_COUNT < 10",
+                    "output-to": ["output"]
+                },
+                {
+                    "name": "long-handler",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Handle long inputs",
+                    "if": "$WORD_COUNT >= 10",
+                    "output-to": ["output"]
+                },
+                {"name": "output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        let processor = PipelineProcessor::new(&comp).unwrap();
+        let router = processor.nodes.get("router").unwrap();
+
+        // Test short input (5 words)
+        let short_request = PipelineRequest::new("Hello world this is short".to_string());
+        let short_targets = processor.get_next_targets_filtered(router, &short_request).unwrap();
+        assert_eq!(short_targets.len(), 1);
+        assert_eq!(short_targets[0], "short-handler");
+
+        // Test long input (15 words)
+        let long_request = PipelineRequest::new(
+            "This is a much longer input that should be routed to the long handler node".to_string()
+        );
+        let long_targets = processor.get_next_targets_filtered(router, &long_request).unwrap();
+        assert_eq!(long_targets.len(), 1);
+        assert_eq!(long_targets[0], "long-handler");
+    }
+
+    #[test]
+    fn test_condition_filters_targets_by_hop_count() {
+        // Test that conditions on HOP_COUNT correctly filter targets
+        let json = r#"{
+            "models": {
+                "model": {
+                    "type": "external",
+                    "interface": "openai-api",
+                    "url": "http://localhost:8080"
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "output-to": [1]
+                },
+                {
+                    "name": "first-pass",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "First processing pass",
+                    "if": "$HOP_COUNT == \"0\"",
+                    "output-to": [2]
+                },
+                {
+                    "name": "second-pass",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Second processing pass",
+                    "if": "$HOP_COUNT > 0",
+                    "output-to": ["output"]
+                },
+                {
+                    "name": "refiner",
+                    "layer": 2,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Refine output",
+                    "output-to": ["output"]
+                },
+                {"name": "output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        let processor = PipelineProcessor::new(&comp).unwrap();
+        let router = processor.nodes.get("router").unwrap();
+
+        // Fresh request (HOP_COUNT = 0)
+        let request = PipelineRequest::new("Hello".to_string());
+        let targets = processor.get_next_targets_filtered(router, &request).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], "first-pass");
+
+        // Request with 1 hop
+        let mut request_with_hop = PipelineRequest::new("Hello".to_string());
+        request_with_hop.add_hop("router".to_string(), 0, Some("first-pass".to_string()));
+        let targets = processor.get_next_targets_filtered(router, &request_with_hop).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], "second-pass");
+    }
+
+    #[test]
+    fn test_condition_filters_by_prev_node() {
+        // Test that conditions on PREV_NODE correctly filter targets
+        let json = r#"{
+            "models": {
+                "model": {
+                    "type": "external",
+                    "interface": "openai-api",
+                    "url": "http://localhost:8080"
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "output-to": [1]
+                },
+                {
+                    "name": "handler-a",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Handler A",
+                    "output-to": [2]
+                },
+                {
+                    "name": "handler-b",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Handler B",
+                    "output-to": [2]
+                },
+                {
+                    "name": "refiner-for-a",
+                    "layer": 2,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Refine A output",
+                    "if": "$PREV_NODE == \"handler-a\"",
+                    "output-to": ["output"]
+                },
+                {
+                    "name": "refiner-for-b",
+                    "layer": 2,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Refine B output",
+                    "if": "$PREV_NODE == \"handler-b\"",
+                    "output-to": ["output"]
+                },
+                {"name": "output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        let processor = PipelineProcessor::new(&comp).unwrap();
+        let handler_a = processor.nodes.get("handler-a").unwrap();
+
+        // Request that came from handler-a
+        let mut request_from_a = PipelineRequest::new("Hello".to_string());
+        request_from_a.add_hop("handler-a".to_string(), 1, None);
+        let targets = processor.get_next_targets_filtered(handler_a, &request_from_a).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], "refiner-for-a");
+
+        // Request that came from handler-b
+        let handler_b = processor.nodes.get("handler-b").unwrap();
+        let mut request_from_b = PipelineRequest::new("Hello".to_string());
+        request_from_b.add_hop("handler-b".to_string(), 1, None);
+        let targets = processor.get_next_targets_filtered(handler_b, &request_from_b).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], "refiner-for-b");
+    }
+
+    #[test]
+    fn test_no_matching_conditions_returns_all_targets() {
+        // Test that when no conditions match, all targets are returned
+        let json = r#"{
+            "models": {
+                "model": {
+                    "type": "external",
+                    "interface": "openai-api",
+                    "url": "http://localhost:8080"
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "output-to": [1]
+                },
+                {
+                    "name": "handler-impossible",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Impossible condition",
+                    "if": "$WORD_COUNT > 9999",
+                    "output-to": ["output"]
+                },
+                {
+                    "name": "handler-also-impossible",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Also impossible",
+                    "if": "$HOP_COUNT > 100",
+                    "output-to": ["output"]
+                },
+                {"name": "output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        let processor = PipelineProcessor::new(&comp).unwrap();
+        let router = processor.nodes.get("router").unwrap();
+
+        // Neither condition can be satisfied, so we get all targets back
+        let request = PipelineRequest::new("Hello world".to_string());
+        let targets = processor.get_next_targets_filtered(router, &request).unwrap();
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn test_mixed_conditions_and_no_conditions() {
+        // Test mixing nodes with and without conditions
+        let json = r#"{
+            "models": {
+                "model": {
+                    "type": "external",
+                    "interface": "openai-api",
+                    "url": "http://localhost:8080"
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "output-to": [1]
+                },
+                {
+                    "name": "fallback",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Default fallback (no condition)",
+                    "output-to": ["output"]
+                },
+                {
+                    "name": "long-only",
+                    "layer": 1,
+                    "model": "model",
+                    "adapter": "openai-api",
+                    "use-case": "Only for long inputs",
+                    "if": "$WORD_COUNT >= 20",
+                    "output-to": ["output"]
+                },
+                {"name": "output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        let processor = PipelineProcessor::new(&comp).unwrap();
+        let router = processor.nodes.get("router").unwrap();
+
+        // Short input - only fallback passes (long-only condition fails)
+        let short_request = PipelineRequest::new("Hello world".to_string());
+        let targets = processor.get_next_targets_filtered(router, &short_request).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], "fallback");
+
+        // Long input - both pass (fallback has no condition, long-only condition passes)
+        let long_request = PipelineRequest::new(
+            "This is a very long input that has many many words to ensure it passes the twenty word threshold easily and then some more words"
+                .to_string()
+        );
+        let targets = processor.get_next_targets_filtered(router, &long_request).unwrap();
+        assert_eq!(targets.len(), 2);
     }
 }
