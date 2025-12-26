@@ -96,6 +96,9 @@ jobs:
       - name: Validate dual-expert example
         run: ./bin/llmnet --dry-run examples/dual-expert.json
 
+      - name: Validate multi-layer-pipeline example
+        run: ./bin/llmnet --dry-run examples/multi-layer-pipeline.json
+
   deploy-test:
     name: Deploy & Test Pipeline
     runs-on: ubuntu-latest
@@ -143,3 +146,63 @@ jobs:
           # Check that we got a valid response
           echo "$response" | grep -q "choices" || exit 1
           echo "Chat completion test passed"
+
+  deploy-test-multilayer:
+    name: Deploy & Test Multi-Layer Pipeline
+    runs-on: ubuntu-latest
+    needs: [build, test, validate-examples]
+    # Only run on PRs to avoid unnecessary API usage
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: llmnet-binary
+          path: ./bin
+
+      - name: Make binary executable
+        run: chmod +x ./bin/llmnet
+
+      - name: Create runtime config with secret
+        run: |
+          sed 's/\$OPENROUTER_API_KEY_FREE/${{ secrets.OPENROUTER_API_KEY_FREE }}/g' \
+            examples/multi-layer-pipeline.json > /tmp/runtime-config.json
+
+      - name: Start llmnet server
+        run: |
+          ./bin/llmnet /tmp/runtime-config.json &
+          sleep 5
+          echo "Server started"
+
+      - name: Health check
+        run: |
+          curl -f http://localhost:8080/health || exit 1
+          echo "Health check passed"
+
+      - name: Test multi-layer technical query
+        run: |
+          response=$(curl -s -X POST http://localhost:8080/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "llmnet",
+              "messages": [{"role": "user", "content": "What is 2+2? Answer with just the number."}],
+              "max_tokens": 50
+            }')
+          echo "Technical Response: $response"
+          echo "$response" | grep -q "choices" || exit 1
+          echo "Multi-layer technical test passed"
+
+      - name: Test multi-layer creative query
+        run: |
+          response=$(curl -s -X POST http://localhost:8080/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "llmnet",
+              "messages": [{"role": "user", "content": "Write a haiku about the moon."}],
+              "max_tokens": 100
+            }')
+          echo "Creative Response: $response"
+          echo "$response" | grep -q "choices" || exit 1
+          echo "Multi-layer creative test passed"
