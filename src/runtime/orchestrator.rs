@@ -100,7 +100,7 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
                     .find(|n| {
                         n.condition
                             .as_ref()
-                            .map(|c| evaluate_condition(c, &request.headers))
+                            .map(|c| evaluate_condition(c, request.get_variables()))
                             .unwrap_or(true)
                     })
                     .ok_or_else(|| OrchestratorError::EmptyLayer(current_layer))?;
@@ -140,7 +140,7 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
                             if node
                                 .condition
                                 .as_ref()
-                                .map(|c| evaluate_condition(c, &request.headers))
+                                .map(|c| evaluate_condition(c, request.get_variables()))
                                 .unwrap_or(true)
                             {
                                 Some(node)

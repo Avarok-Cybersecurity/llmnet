@@ -1,0 +1,79 @@
+{
+  "models": {
+    "router": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    },
+    "domain-handler": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    },
+    "refiner": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "https://openrouter.ai/api",
+      "api-key": "$OPENROUTER_API_KEY_FREE"
+    }
+  },
+  "architecture": [
+    {
+      "name": "router",
+      "layer": 0,
+      "model": "router",
+      "adapter": "openai-api",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8080",
+      "output-to": [1],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "technical-handler",
+      "layer": 1,
+      "model": "domain-handler",
+      "adapter": "openai-api",
+      "use-case": "Technical questions, coding, math, science, and debugging",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8081",
+      "output-to": [2],
+      "extra-options": {
+        "model_override": "qwen/qwen3-coder:free"
+      }
+    },
+    {
+      "name": "creative-handler",
+      "layer": 1,
+      "model": "domain-handler",
+      "adapter": "openai-api",
+      "use-case": "Creative writing, storytelling, poetry, and brainstorming",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8082",
+      "output-to": [2],
+      "extra-options": {
+        "model_override": "meta-llama/llama-3.3-70b-instruct:free"
+      }
+    },
+    {
+      "name": "response-refiner",
+      "layer": 2,
+      "model": "refiner",
+      "adapter": "openai-api",
+      "use-case": "Polish and refine the response for clarity and quality",
+      "bind-addr": "0.0.0.0",
+      "bind-port": "8083",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "google/gemma-3-27b-it:free"
+      }
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}
