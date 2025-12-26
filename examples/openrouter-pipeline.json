@@ -3,19 +3,19 @@
     "router-gemma": {
       "type": "external",
       "interface": "openai-api",
-      "url": "https://openrouter.ai/api/v1",
+      "url": "https://openrouter.ai/api",
       "api-key": "$OPENROUTER_API_KEY_FREE"
     },
     "handler-llama": {
       "type": "external",
       "interface": "openai-api",
-      "url": "https://openrouter.ai/api/v1",
+      "url": "https://openrouter.ai/api",
       "api-key": "$OPENROUTER_API_KEY_FREE"
     },
     "handler-mistral": {
       "type": "external",
       "interface": "openai-api",
-      "url": "https://openrouter.ai/api/v1",
+      "url": "https://openrouter.ai/api",
       "api-key": "$OPENROUTER_API_KEY_FREE"
     }
   },
