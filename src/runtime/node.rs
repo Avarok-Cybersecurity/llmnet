@@ -32,6 +32,7 @@ pub struct RuntimeNode {
     pub output_targets: Option<OutputTarget>,
     pub use_case: Option<String>,
     pub condition: Option<String>,
+    pub extra_options: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl RuntimeNode {
@@ -57,7 +58,16 @@ impl RuntimeNode {
             output_targets: node.output_to.clone(),
             use_case: node.use_case.clone(),
             condition: node.condition.clone(),
+            extra_options: node.extra_options.clone(),
         }
+    }
+
+    /// Get the model override from extra_options if specified
+    pub fn model_override(&self) -> Option<String> {
+        self.extra_options
+            .get("model_override")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
     /// Check if this node is the final output
@@ -133,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_adapter_type_from_node() {
-        let mut node = ArchitectureNode {
+        let node1 = ArchitectureNode {
             name: "test".to_string(),
             layer: None,
             model: None,
@@ -146,15 +156,37 @@ mod tests {
             url: None,
             extra_options: HashMap::new(),
         };
+        assert_eq!(AdapterType::from_node(&node1), AdapterType::OpenAiApi);
 
-        assert_eq!(AdapterType::from_node(&node), AdapterType::OpenAiApi);
+        let node2 = ArchitectureNode {
+            name: "test".to_string(),
+            layer: None,
+            model: None,
+            adapter: "output".to_string(),
+            bind_addr: None,
+            bind_port: None,
+            output_to: None,
+            use_case: None,
+            condition: None,
+            url: None,
+            extra_options: HashMap::new(),
+        };
+        assert_eq!(AdapterType::from_node(&node2), AdapterType::Output);
 
-        node.adapter = "output".to_string();
-        assert_eq!(AdapterType::from_node(&node), AdapterType::Output);
-
-        node.adapter = "ws".to_string();
-        node.url = Some("ws://localhost:3000".to_string());
-        assert!(matches!(AdapterType::from_node(&node), AdapterType::WebSocket { .. }));
+        let node3 = ArchitectureNode {
+            name: "test".to_string(),
+            layer: None,
+            model: None,
+            adapter: "ws".to_string(),
+            bind_addr: None,
+            bind_port: None,
+            output_to: None,
+            use_case: None,
+            condition: None,
+            url: Some("ws://localhost:3000".to_string()),
+            extra_options: HashMap::new(),
+        };
+        assert!(matches!(AdapterType::from_node(&node3), AdapterType::WebSocket { .. }));
     }
 
     #[test]
