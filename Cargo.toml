@@ -44,6 +44,12 @@ dotenvy = "0.15"
 # Async trait for SBIO
 async-trait = "0.1"
 
+# YAML for config files (kubeconfig-style)
+serde_yaml = "0.9"
+
+# Home directory detection
+dirs = "5"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
