@@ -85,22 +85,22 @@ jobs:
         run: chmod +x ./bin/llmnet
 
       - name: Validate nemotron-router example
-        run: ./bin/llmnet --dry-run examples/nemotron-router.json
+        run: ./bin/llmnet validate examples/nemotron-router.json
 
       - name: Validate openrouter-pipeline example
-        run: ./bin/llmnet --dry-run examples/openrouter-pipeline.json
+        run: ./bin/llmnet validate examples/openrouter-pipeline.json
 
       - name: Validate basic-chatbot example
-        run: ./bin/llmnet --dry-run examples/basic-chatbot.json
+        run: ./bin/llmnet validate examples/basic-chatbot.json
 
       - name: Validate dual-expert example
-        run: ./bin/llmnet --dry-run examples/dual-expert.json
+        run: ./bin/llmnet validate examples/dual-expert.json
 
       - name: Validate multi-layer-pipeline example
-        run: ./bin/llmnet --dry-run examples/multi-layer-pipeline.json
+        run: ./bin/llmnet validate examples/multi-layer-pipeline.json
 
       - name: Validate conditional-routing example
-        run: ./bin/llmnet --dry-run examples/conditional-routing.json
+        run: ./bin/llmnet validate examples/conditional-routing.json
 
   deploy-test:
     name: Deploy & Test Pipeline
@@ -127,7 +127,7 @@ jobs:
 
       - name: Start llmnet server
         run: |
-          ./bin/llmnet /tmp/runtime-config.json &
+          ./bin/llmnet run /tmp/runtime-config.json &
           sleep 5
           echo "Server started"
 
@@ -175,7 +175,7 @@ jobs:
 
       - name: Start llmnet server
         run: |
-          ./bin/llmnet /tmp/runtime-config.json &
+          ./bin/llmnet run /tmp/runtime-config.json &
           sleep 5
           echo "Server started"
 
@@ -235,7 +235,7 @@ jobs:
 
       - name: Start llmnet server
         run: |
-          ./bin/llmnet /tmp/runtime-config.json &
+          ./bin/llmnet run /tmp/runtime-config.json &
           sleep 5
           echo "Server started"
 
