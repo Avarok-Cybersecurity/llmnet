@@ -10,7 +10,11 @@ use llmnet::cli::{
     format_validation_result, Cli, Commands, ContextAction, ControlPlaneClient, DeleteResource,
     GetResource,
 };
-use llmnet::cluster::{create_control_plane_router, ControlPlaneState, Pipeline, CONTROL_PLANE_PORT};
+use llmnet::cluster::{
+    create_control_plane_router, spawn_heartbeat, ControlPlaneState, HeartbeatConfig, Node,
+    NodeCapacity, Pipeline, CONTROL_PLANE_PORT,
+};
+use llmnet::metrics::new_shared_collector;
 use llmnet::config::load_composition_file;
 use llmnet::context;
 use llmnet::server::{create_router, AppState};
@@ -93,20 +97,62 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
 
         axum::serve(listener, app).await?;
     } else {
-        // Run as worker node (future: register with control plane)
+        // Run as worker node
         let port = args.port.unwrap_or(8080);
         let addr = format!("{}:{}", args.bind_addr, port);
+        let node_name = args.node_name.unwrap_or_else(|| {
+            hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "worker".to_string())
+        });
 
-        if let Some(ref cp_url) = args.control_plane_url {
+        // Create metrics collector for heartbeats
+        let metrics_collector = new_shared_collector();
+
+        // Optional: register with control plane and start heartbeat
+        let _heartbeat_shutdown = if let Some(ref cp_url) = args.control_plane_url {
             info!(
-                "Starting LLMNet worker, will register with control plane at {}",
-                cp_url
+                "Starting LLMNet worker '{}', registering with control plane at {}",
+                node_name, cp_url
             );
-            // TODO: Implement node registration
-            warn!("Node registration not yet implemented");
-        }
 
-        info!("Starting LLMNet worker on {}", addr);
+            // Register node with control plane
+            let client = reqwest::Client::new();
+            let node = Node::new(&node_name, &args.bind_addr).with_port(port);
+
+            match client
+                .post(format!("{}/v1/nodes", cp_url))
+                .json(&node)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    info!("Node '{}' registered with control plane", node_name);
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    warn!(
+                        "Failed to register node ({}): {}",
+                        status, body
+                    );
+                }
+                Err(e) => {
+                    warn!("Failed to connect to control plane: {}", e);
+                }
+            }
+
+            // Start heartbeat client
+            let heartbeat_config = HeartbeatConfig::new(cp_url.clone(), node_name.clone())
+                .with_capacity(NodeCapacity::default());
+
+            Some(spawn_heartbeat(heartbeat_config, metrics_collector.clone()))
+        } else {
+            None
+        };
+
+        info!("Starting LLMNet worker '{}' on {}", node_name, addr);
 
         // For now, run an empty worker that just responds to health checks
         let json = r#"{

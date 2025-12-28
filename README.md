@@ -1,6 +1,8 @@
 <div align="center">
 
-# llmnet
+<img src="assets/logo.png" alt="LLMNet Logo" width="400">
+
+<br>
 
 **The future is small models routed to — intelligently.**
 

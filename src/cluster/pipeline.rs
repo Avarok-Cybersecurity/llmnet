@@ -97,6 +97,11 @@ pub struct PipelineSpec {
     /// Resource requirements
     #[serde(default)]
     pub resources: ResourceRequirements,
+
+    /// Auto-scaling configuration (optional)
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autoscaling: Option<AutoscalingConfig>,
 }
 
 fn default_replicas() -> u32 {
@@ -248,6 +253,109 @@ pub struct ResourceRequirements {
     pub memory: Option<String>,
 }
 
+/// Auto-scaling configuration for a pipeline
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoscalingConfig {
+    /// Minimum number of replicas (default: 1)
+    #[serde(rename = "minReplicas")]
+    #[serde(default = "default_min_replicas")]
+    pub min_replicas: u32,
+
+    /// Maximum number of replicas (default: 10)
+    #[serde(rename = "maxReplicas")]
+    #[serde(default = "default_max_replicas")]
+    pub max_replicas: u32,
+
+    /// Target CPU utilization percentage (default: 70.0)
+    #[serde(rename = "targetCpuUtilization")]
+    #[serde(default = "default_target_cpu")]
+    pub target_cpu_utilization: f64,
+
+    /// Target memory utilization percentage (default: 80.0)
+    #[serde(rename = "targetMemoryUtilization")]
+    #[serde(default = "default_target_memory")]
+    pub target_memory_utilization: f64,
+
+    /// Scale-up cooldown in seconds (default: 60)
+    #[serde(rename = "scaleUpCooldownSeconds")]
+    #[serde(default = "default_scale_up_cooldown")]
+    pub scale_up_cooldown_seconds: u64,
+
+    /// Scale-down cooldown in seconds (default: 300)
+    #[serde(rename = "scaleDownCooldownSeconds")]
+    #[serde(default = "default_scale_down_cooldown")]
+    pub scale_down_cooldown_seconds: u64,
+
+    /// Scaling behavior configuration
+    #[serde(default)]
+    pub behavior: ScalingBehavior,
+}
+
+impl Default for AutoscalingConfig {
+    fn default() -> Self {
+        Self {
+            min_replicas: default_min_replicas(),
+            max_replicas: default_max_replicas(),
+            target_cpu_utilization: default_target_cpu(),
+            target_memory_utilization: default_target_memory(),
+            scale_up_cooldown_seconds: default_scale_up_cooldown(),
+            scale_down_cooldown_seconds: default_scale_down_cooldown(),
+            behavior: ScalingBehavior::default(),
+        }
+    }
+}
+
+fn default_min_replicas() -> u32 {
+    1
+}
+
+fn default_max_replicas() -> u32 {
+    10
+}
+
+fn default_target_cpu() -> f64 {
+    70.0
+}
+
+fn default_target_memory() -> f64 {
+    80.0
+}
+
+fn default_scale_up_cooldown() -> u64 {
+    60
+}
+
+fn default_scale_down_cooldown() -> u64 {
+    300
+}
+
+/// Scaling behavior configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScalingBehavior {
+    /// Maximum replicas to add per scale-up event
+    #[serde(rename = "maxScaleUp")]
+    #[serde(default = "default_max_scale_step")]
+    pub max_scale_up: u32,
+
+    /// Maximum replicas to remove per scale-down event
+    #[serde(rename = "maxScaleDown")]
+    #[serde(default = "default_max_scale_step")]
+    pub max_scale_down: u32,
+}
+
+impl Default for ScalingBehavior {
+    fn default() -> Self {
+        Self {
+            max_scale_up: default_max_scale_step(),
+            max_scale_down: default_max_scale_step(),
+        }
+    }
+}
+
+fn default_max_scale_step() -> u32 {
+    2
+}
+
 /// Current status of a Pipeline (observed state)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStatus {
@@ -326,6 +434,7 @@ impl Pipeline {
                 strategy: RolloutStrategy::default(),
                 node_selector: HashMap::new(),
                 resources: ResourceRequirements::default(),
+                autoscaling: None,
             },
             status: None,
         }

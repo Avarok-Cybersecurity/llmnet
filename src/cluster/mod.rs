@@ -54,16 +54,22 @@
 //! ```
 
 pub mod api;
+pub mod autoscaler;
 pub mod controller;
+pub mod heartbeat;
 pub mod node;
 pub mod pipeline;
 pub mod resources;
+pub mod scoring;
 
 pub use api::{create_control_plane_router, ControlPlaneState};
+pub use autoscaler::{AutoscalerState, ScalingDecision};
+pub use heartbeat::{spawn_heartbeat, HeartbeatClient, HeartbeatConfig};
 pub use controller::{ClusterController, ClusterStats, ControllerConfig};
-pub use node::{Node, NodeCondition, NodePhase, NodeStatus};
-pub use pipeline::{Pipeline, PipelineCondition, PipelineSpec, PipelineStatus};
+pub use node::{Node, NodeCapacity, NodeCondition, NodeMetrics, NodePhase, NodeScore, NodeStatus, ScoreBreakdown};
+pub use pipeline::{AutoscalingConfig, Pipeline, PipelineCondition, PipelineSpec, PipelineStatus, ScalingBehavior};
 pub use resources::*;
+pub use scoring::{calculate_node_score, ScoringWeights};
 
 /// Default control plane API port
 pub const CONTROL_PLANE_PORT: u16 = 8181;

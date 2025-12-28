@@ -50,6 +50,19 @@ serde_yaml = "0.9"
 # Home directory detection
 dirs = "5"
 
+# System hostname
+hostname = "0.4"
+
+# System metrics (CPU, memory, disk)
+sysinfo = "0.33"
+
+# GPU metrics (optional)
+nvml-wrapper = { version = "0.10", optional = true }
+
+[features]
+default = ["gpu"]
+gpu = ["nvml-wrapper"]
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

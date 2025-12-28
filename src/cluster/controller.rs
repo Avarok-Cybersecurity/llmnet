@@ -129,15 +129,25 @@ impl ClusterController {
     }
 
     /// Update node status (heartbeat)
+    ///
+    /// If the status includes metrics, calculates and stores the node score.
     pub fn update_node_status(
         &self,
         name: &str,
-        status: NodeStatus,
+        mut status: NodeStatus,
     ) -> Result<(), ControllerError> {
         let mut node = self
             .nodes
             .get_mut(name)
             .ok_or_else(|| ControllerError::NodeNotFound(name.to_string()))?;
+
+        // Calculate score if metrics are present
+        if let Some(ref metrics) = status.metrics {
+            let has_gpu = status.capacity.gpu > 0;
+            let score = super::scoring::calculate_node_score(metrics, has_gpu, None);
+            status.score = Some(score);
+        }
+
         node.status = Some(status);
         Ok(())
     }
@@ -352,14 +362,18 @@ impl ClusterController {
     // Scheduling
     // =========================================================================
 
-    /// Simple round-robin scheduler for pipeline replicas
+    /// Score-based scheduler for pipeline replicas
+    ///
+    /// Distributes replicas preferring nodes with higher scores (more available
+    /// resources). Falls back to round-robin if no scores are available.
+    ///
     /// Returns a map of node name -> number of replicas to schedule
     pub fn schedule_replicas(
         &self,
         pipeline: &Pipeline,
     ) -> Result<HashMap<String, u32>, ControllerError> {
         let selector = &pipeline.spec.node_selector;
-        let nodes: Vec<Node> = if selector.is_empty() {
+        let mut nodes: Vec<Node> = if selector.is_empty() {
             self.get_schedulable_nodes()
         } else {
             let label_selector = LabelSelector {
@@ -375,13 +389,92 @@ impl ClusterController {
             return Err(ControllerError::NoAvailableNodes);
         }
 
-        // Simple round-robin distribution
+        // Sort nodes by score (highest first)
+        nodes.sort_by(|a, b| {
+            let score_a = a
+                .status
+                .as_ref()
+                .and_then(|s| s.score.as_ref())
+                .map(|s| s.score)
+                .unwrap_or(50.0); // Default score if no metrics
+            let score_b = b
+                .status
+                .as_ref()
+                .and_then(|s| s.score.as_ref())
+                .map(|s| s.score)
+                .unwrap_or(50.0);
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         let replicas = pipeline.spec.replicas;
         let mut schedule: HashMap<String, u32> = HashMap::new();
 
-        for i in 0..replicas {
-            let node = &nodes[i as usize % nodes.len()];
-            *schedule.entry(node.metadata.name.clone()).or_insert(0) += 1;
+        // Calculate total score for weighted distribution
+        let total_score: f64 = nodes
+            .iter()
+            .map(|n| {
+                n.status
+                    .as_ref()
+                    .and_then(|s| s.score.as_ref())
+                    .map(|s| s.score)
+                    .unwrap_or(50.0)
+            })
+            .sum();
+
+        // Check if we have meaningful scores
+        let has_meaningful_scores = nodes.iter().any(|n| {
+            n.status
+                .as_ref()
+                .and_then(|s| s.score.as_ref())
+                .is_some()
+        });
+
+        if !has_meaningful_scores || total_score == 0.0 {
+            // Fallback to round-robin if no scores
+            for i in 0..replicas {
+                let node = &nodes[i as usize % nodes.len()];
+                *schedule.entry(node.metadata.name.clone()).or_insert(0) += 1;
+            }
+        } else {
+            // Weighted distribution based on scores
+            // Nodes with higher scores get proportionally more replicas
+            let mut remaining = replicas;
+
+            for (i, node) in nodes.iter().enumerate() {
+                if remaining == 0 {
+                    break;
+                }
+
+                let score = node
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.score.as_ref())
+                    .map(|s| s.score)
+                    .unwrap_or(50.0);
+
+                // Calculate fair share based on score proportion
+                let share = ((score / total_score) * replicas as f64).round() as u32;
+
+                // Ensure we assign at least some to good nodes, and handle remainder
+                let to_assign = if i == nodes.len() - 1 {
+                    remaining // Last node gets whatever is left
+                } else {
+                    share.min(remaining)
+                };
+
+                if to_assign > 0 {
+                    schedule.insert(node.metadata.name.clone(), to_assign);
+                    remaining = remaining.saturating_sub(to_assign);
+                }
+            }
+
+            // If we still have remaining (due to rounding), assign to best node
+            if remaining > 0 {
+                let best_node = &nodes[0];
+                *schedule.entry(best_node.metadata.name.clone()).or_insert(0) += remaining;
+            }
         }
 
         Ok(schedule)

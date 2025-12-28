@@ -4,5 +4,6 @@ pub mod client;
 pub mod cluster;
 pub mod config;
 pub mod context;
+pub mod metrics;
 pub mod runtime;
 pub mod server;

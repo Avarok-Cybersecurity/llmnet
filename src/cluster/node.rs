@@ -97,6 +97,16 @@ pub struct NodeStatus {
     /// Node information (OS, version, etc.)
     #[serde(rename = "nodeInfo")]
     pub node_info: NodeInfo,
+
+    /// Real-time metrics from this node
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<NodeMetrics>,
+
+    /// Calculated score for scheduling (populated by control plane)
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<NodeScore>,
 }
 
 /// Phase of a node
@@ -158,6 +168,104 @@ pub enum NodeConditionType {
     NetworkUnavailable,
     /// GPU is available
     GPUAvailable,
+}
+
+/// Real-time metrics reported by a node
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeMetrics {
+    /// CPU utilization percentage (0.0 - 100.0)
+    #[serde(rename = "cpuUsagePercent")]
+    #[serde(default)]
+    pub cpu_usage_percent: f64,
+
+    /// Memory utilization percentage (0.0 - 100.0)
+    #[serde(rename = "memoryUsagePercent")]
+    #[serde(default)]
+    pub memory_usage_percent: f64,
+
+    /// GPU utilization percentage (0.0 - 100.0), None if no GPU
+    #[serde(rename = "gpuUsagePercent")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_usage_percent: Option<f64>,
+
+    /// GPU memory utilization percentage (0.0 - 100.0), None if no GPU
+    #[serde(rename = "gpuMemoryUsagePercent")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_memory_usage_percent: Option<f64>,
+
+    /// Disk utilization percentage (0.0 - 100.0)
+    #[serde(rename = "diskUsagePercent")]
+    #[serde(default)]
+    pub disk_usage_percent: f64,
+
+    /// Total requests processed since last heartbeat
+    #[serde(rename = "requestCount")]
+    #[serde(default)]
+    pub request_count: u64,
+
+    /// Average request latency in milliseconds
+    #[serde(rename = "avgLatencyMs")]
+    #[serde(default)]
+    pub avg_latency_ms: f64,
+
+    /// Active concurrent requests
+    #[serde(rename = "activeRequests")]
+    #[serde(default)]
+    pub active_requests: u32,
+
+    /// Timestamp when metrics were collected
+    #[serde(rename = "collectedAt")]
+    #[serde(default = "Utc::now")]
+    pub collected_at: DateTime<Utc>,
+}
+
+/// Calculated score for a node (higher = more preferred for scheduling)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeScore {
+    /// Overall score (0.0 - 100.0)
+    pub score: f64,
+
+    /// Individual component scores
+    pub breakdown: ScoreBreakdown,
+
+    /// When this score was calculated
+    #[serde(rename = "calculatedAt")]
+    pub calculated_at: DateTime<Utc>,
+}
+
+impl Default for NodeScore {
+    fn default() -> Self {
+        Self {
+            score: 50.0,
+            breakdown: ScoreBreakdown::default(),
+            calculated_at: Utc::now(),
+        }
+    }
+}
+
+/// Breakdown of score components
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScoreBreakdown {
+    /// CPU availability score (100 - usage%)
+    #[serde(rename = "cpuScore")]
+    pub cpu_score: f64,
+
+    /// Memory availability score (100 - usage%)
+    #[serde(rename = "memoryScore")]
+    pub memory_score: f64,
+
+    /// GPU availability score (100 - usage%), None if no GPU
+    #[serde(rename = "gpuScore")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_score: Option<f64>,
+
+    /// Disk availability score (100 - usage%)
+    #[serde(rename = "diskScore")]
+    pub disk_score: f64,
+
+    /// Load score based on active requests
+    #[serde(rename = "loadScore")]
+    pub load_score: f64,
 }
 
 /// Resource capacity of a node
@@ -346,7 +454,15 @@ impl NodeStatus {
             pipelines: vec![],
             last_heartbeat: Utc::now(),
             node_info,
+            metrics: None,
+            score: None,
         }
+    }
+
+    /// Create status with metrics
+    pub fn with_metrics(mut self, metrics: NodeMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Update heartbeat timestamp

@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use super::{
     controller::ClusterController,
-    node::{Node, NodeStatus},
-    pipeline::Pipeline,
+    node::{Node, NodeScore, NodeStatus},
+    pipeline::{AutoscalingConfig, Pipeline},
     resources::{OperationStatus, ResourceList},
     ClusterStats,
 };
@@ -69,10 +69,16 @@ pub fn create_control_plane_router(state: ControlPlaneState) -> Router {
             "/v1/namespaces/{namespace}/pipelines/{name}/scale",
             patch(scale_pipeline),
         )
+        // Autoscaling
+        .route(
+            "/v1/namespaces/{namespace}/pipelines/{name}/autoscaling",
+            get(get_autoscaling).put(update_autoscaling),
+        )
         // Nodes
         .route("/v1/nodes", get(list_nodes).post(register_node))
         .route("/v1/nodes/{name}", get(get_node).delete(unregister_node))
         .route("/v1/nodes/{name}/heartbeat", post(node_heartbeat))
+        .route("/v1/nodes/{name}/score", get(get_node_score))
         .route("/v1/nodes/{name}/cordon", post(cordon_node))
         .route("/v1/nodes/{name}/uncordon", post(uncordon_node))
         // Namespaces
@@ -208,6 +214,66 @@ async fn scale_pipeline(
 }
 
 // ============================================================================
+// Autoscaling Endpoints
+// ============================================================================
+
+async fn get_autoscaling(
+    State(state): State<ControlPlaneState>,
+    Path((namespace, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.controller.get_pipeline(&namespace, &name) {
+        Some(pipeline) => {
+            let response = AutoscalingResponse {
+                pipeline_name: pipeline.metadata.name.clone(),
+                namespace: pipeline.metadata.namespace.clone(),
+                current_replicas: pipeline.spec.replicas,
+                autoscaling: pipeline.spec.autoscaling.clone(),
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(OperationStatus::failure("Pipeline not found")),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct AutoscalingResponse {
+    #[serde(rename = "pipelineName")]
+    pipeline_name: String,
+    namespace: String,
+    #[serde(rename = "currentReplicas")]
+    current_replicas: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    autoscaling: Option<AutoscalingConfig>,
+}
+
+async fn update_autoscaling(
+    State(state): State<ControlPlaneState>,
+    Path((namespace, name)): Path<(String, String)>,
+    Json(config): Json<AutoscalingConfig>,
+) -> impl IntoResponse {
+    match state.controller.get_pipeline(&namespace, &name) {
+        Some(mut pipeline) => {
+            pipeline.spec.autoscaling = Some(config);
+            match state.controller.update_pipeline(pipeline) {
+                Ok(updated) => (StatusCode::OK, Json(DeployResponse::success(updated))),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(DeployResponse::error(e.to_string())),
+                ),
+            }
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(DeployResponse::error("Pipeline not found".to_string())),
+        ),
+    }
+}
+
+// ============================================================================
 // Node Endpoints
 // ============================================================================
 
@@ -299,6 +365,61 @@ async fn node_heartbeat(
             StatusCode::NOT_FOUND,
             Json(OperationStatus::failure(e.to_string())),
         ),
+    }
+}
+
+async fn get_node_score(
+    State(state): State<ControlPlaneState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.controller.get_node(&name) {
+        Some(node) => {
+            let score = node
+                .status
+                .as_ref()
+                .and_then(|s| s.score.clone());
+            match score {
+                Some(s) => (StatusCode::OK, Json(NodeScoreResponse::with_score(name, s))).into_response(),
+                None => (
+                    StatusCode::OK,
+                    Json(NodeScoreResponse::no_score(name)),
+                )
+                    .into_response(),
+            }
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(OperationStatus::failure("Node not found")),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct NodeScoreResponse {
+    #[serde(rename = "nodeName")]
+    node_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<NodeScore>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+impl NodeScoreResponse {
+    fn with_score(name: String, score: NodeScore) -> Self {
+        Self {
+            node_name: name,
+            score: Some(score),
+            message: None,
+        }
+    }
+
+    fn no_score(name: String) -> Self {
+        Self {
+            node_name: name,
+            score: None,
+            message: Some("No metrics available yet".to_string()),
+        }
     }
 }
 
