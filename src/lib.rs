@@ -1,6 +1,9 @@
+pub mod adapters;
 pub mod cli;
 pub mod client;
+pub mod cluster;
 pub mod config;
+pub mod context;
+pub mod metrics;
 pub mod runtime;
 pub mod server;
-pub mod adapters;

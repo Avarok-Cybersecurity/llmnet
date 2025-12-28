@@ -1,6 +1,8 @@
 <div align="center">
 
-# llmnet
+<img src="assets/logo.png" alt="LLMNet Logo" width="400">
+
+<br>
 
 **The future is small models routed to — intelligently.**
 
@@ -46,10 +48,23 @@ cargo build --release
 
 ```bash
 # Validate configuration
-./target/release/llmnet --dry-run examples/basic-chatbot.json
+./target/release/llmnet validate examples/basic-chatbot.json
 
 # Start the server
-./target/release/llmnet examples/basic-chatbot.json
+./target/release/llmnet run examples/basic-chatbot.json
+```
+
+### Deploy to a Cluster
+
+```bash
+# Start the control plane (in one terminal)
+./target/release/llmnet serve --control-plane
+
+# Deploy a pipeline (in another terminal)
+./target/release/llmnet deploy examples/basic-chatbot.json
+
+# Check status
+./target/release/llmnet get pipelines
 ```
 
 ### Make a Request
@@ -229,35 +244,78 @@ See [Conditional Routing Guide](docs/examples/conditional-routing.md) for full d
 
 ## CLI Reference
 
+llmnet provides a kubectl-like interface for managing LLM pipelines across local and remote clusters.
+
+### Core Commands
+
+```bash
+# Run a local pipeline (legacy mode)
+llmnet run config.json
+
+# Validate a configuration
+llmnet validate config.json
+
+# Start the control plane server
+llmnet serve --control-plane
+
+# Deploy a pipeline to the current context
+llmnet deploy pipeline.yaml
+
+# List resources
+llmnet get pipelines
+llmnet get nodes
+llmnet get namespaces
+
+# Scale a pipeline
+llmnet scale my-pipeline --replicas 3
+
+# Delete resources
+llmnet delete pipeline my-pipeline
+
+# View cluster status
+llmnet status
 ```
-llmnet [OPTIONS] <CONFIG_FILE>
 
-Arguments:
-  <CONFIG_FILE>    Path to JSON configuration file
+### Context Management
 
-Options:
-      --dry-run         Validate and preview without running
+Manage connections to multiple LLMNet clusters:
+
+```bash
+# List available contexts
+llmnet context list
+
+# Add a remote cluster context
+llmnet context add my-cluster --url http://10.0.0.1:8181
+
+# Switch to a context
+llmnet context use my-cluster
+
+# Show current context
+llmnet context current
+```
+
+### Global Options
+
+```
   -v, --verbose...      Increase logging verbosity
-  -p, --port <PORT>     Override starting port
-      --env-file <FILE> Load environment variables
+      --config <PATH>   Path to config file (default: ~/.llmnet/config)
   -h, --help            Print help
   -V, --version         Print version
 ```
 
-### Examples
+### Legacy Mode
+
+For backwards compatibility, you can still run pipelines directly:
 
 ```bash
-# Validate configuration
-llmnet --dry-run config.json
-
-# Run with verbose logging
-llmnet -vv config.json
+# Run with dry-run
+llmnet run --dry-run config.json
 
 # Override port
-llmnet --port 9000 config.json
+llmnet run --port 9000 config.json
 
 # Load API keys from .env
-llmnet --env-file .env.production config.json
+llmnet run --env-file .env.production config.json
 ```
 
 ---
