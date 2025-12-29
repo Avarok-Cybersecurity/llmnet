@@ -1,14 +1,15 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::client::Message;
+use crate::config::models::ModelConfig;
 use crate::server::state::AppState;
 
 /// OpenAI-compatible chat completion request
@@ -67,6 +68,118 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
 struct PipelineStatus {
     nodes: usize,
     active_requests: usize,
+}
+
+// ============================================================================
+// Runner Management Endpoints (Worker Mode)
+// ============================================================================
+
+/// Request to spawn a runner
+#[derive(Debug, Deserialize)]
+pub struct SpawnRunnerRequest {
+    pub name: String,
+    pub config: ModelConfig,
+}
+
+/// Response from spawning a runner
+#[derive(Debug, Serialize)]
+pub struct SpawnRunnerResponse {
+    pub name: String,
+    pub endpoint: String,
+    pub status: String,
+}
+
+/// List of running models
+#[derive(Debug, Serialize)]
+pub struct RunnerListResponse {
+    pub runners: Vec<RunnerInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunnerInfo {
+    pub name: String,
+    pub endpoint: Option<String>,
+}
+
+/// Spawn a model runner (worker endpoint)
+pub async fn spawn_runner(
+    State(state): State<AppState>,
+    Json(request): Json<SpawnRunnerRequest>,
+) -> impl IntoResponse {
+    let Some(manager) = &state.runner_manager else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Runner manager not available"
+            })),
+        );
+    };
+
+    match manager.spawn_runner(&request.name, &request.config).await {
+        Ok(endpoint) => (
+            StatusCode::OK,
+            Json(serde_json::json!(SpawnRunnerResponse {
+                name: request.name,
+                endpoint,
+                status: "running".to_string(),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to spawn runner: {}", e)
+            })),
+        ),
+    }
+}
+
+/// List running models (worker endpoint)
+pub async fn list_runners(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(manager) = &state.runner_manager else {
+        return Json(RunnerListResponse { runners: vec![] });
+    };
+
+    let runners = manager
+        .list_running()
+        .into_iter()
+        .map(|name| {
+            let endpoint = manager.get_endpoint(&name);
+            RunnerInfo { name, endpoint }
+        })
+        .collect();
+
+    Json(RunnerListResponse { runners })
+}
+
+/// Stop a running model (worker endpoint)
+pub async fn stop_runner(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(manager) = &state.runner_manager else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Runner manager not available"
+            })),
+        );
+    };
+
+    match manager.stop_runner(&name).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "stopped",
+                "name": name
+            })),
+        ),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Failed to stop runner: {}", e)
+            })),
+        ),
+    }
 }
 
 /// Chat completions endpoint (OpenAI-compatible)
@@ -137,6 +250,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/status", get(status))
         .route("/v1/chat/completions", post(chat_completions))
+        // Runner management endpoints (worker mode)
+        .route("/v1/runners", get(list_runners))
+        .route("/v1/runners/spawn", post(spawn_runner))
+        .route("/v1/runners/{name}", delete(stop_runner))
         .with_state(state)
 }
 
