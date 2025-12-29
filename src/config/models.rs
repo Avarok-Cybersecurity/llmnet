@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::runtime::docker::DockerConfig;
+
 /// Runner type for model execution
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -75,6 +77,10 @@ pub struct ModelConfig {
     /// Runner-specific parameters
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub parameters: HashMap<String, Value>,
+
+    /// Docker configuration (for runner: "docker")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docker: Option<DockerConfig>,
 }
 
 fn default_interface() -> String {
@@ -90,6 +96,7 @@ impl Default for ModelConfig {
             endpoint: None,
             api_key: None,
             parameters: HashMap::new(),
+            docker: None,
         }
     }
 }
@@ -129,6 +136,22 @@ impl ModelConfig {
             source: Some(source.into()),
             ..Default::default()
         }
+    }
+
+    /// Create a new Docker-based model configuration
+    pub fn docker(source: impl Into<String>, docker_config: DockerConfig) -> Self {
+        Self {
+            runner: RunnerType::Docker,
+            source: Some(source.into()),
+            docker: Some(docker_config),
+            ..Default::default()
+        }
+    }
+
+    /// Add Docker configuration
+    pub fn with_docker(mut self, docker_config: DockerConfig) -> Self {
+        self.docker = Some(docker_config);
+        self
     }
 
     /// Add an API key
@@ -244,14 +267,16 @@ impl ModelDefinition {
                 api_key: ext.api_key.clone(),
                 source: None,
                 parameters: HashMap::new(),
+                docker: None,
             },
-            ModelDefinition::Docker(docker) => ModelConfig {
+            ModelDefinition::Docker(docker_legacy) => ModelConfig {
                 runner: RunnerType::Docker,
                 interface: "openai-api".to_string(),
-                source: Some(docker.image.clone()),
+                source: Some(docker_legacy.image.clone()),
                 endpoint: None,
                 api_key: None,
                 parameters: HashMap::new(),
+                docker: None, // Legacy format doesn't have full Docker config
             },
             ModelDefinition::Huggingface(hf) => {
                 let runner = match hf.runner.as_str() {
@@ -267,6 +292,7 @@ impl ModelDefinition {
                     endpoint: None,
                     api_key: None,
                     parameters: HashMap::new(),
+                    docker: None,
                 }
             }
             ModelDefinition::Unified(config) => config.clone(),
@@ -403,5 +429,101 @@ mod tests {
         assert!(RunnerType::Vllm.is_local_runner());
         assert!(RunnerType::LlamaCpp.is_local_runner());
         assert!(!RunnerType::Docker.is_local_runner());
+    }
+
+    #[test]
+    fn test_parse_docker_model() {
+        let json = r#"{
+            "runner": "docker",
+            "source": "RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4",
+            "docker": {
+                "image": "dgx-vllm:cutlass-nvfp4",
+                "network": "host",
+                "gpus": "all",
+                "ipc": "host",
+                "volumes": ["${HOME}/.cache/huggingface:/root/.cache/huggingface"],
+                "extra_args": "--swap-space 32 --tool-call-parser hermes --enable-auto-tool-choice"
+            },
+            "parameters": {
+                "tensor_parallel_size": 1,
+                "max_model_len": 131072,
+                "gpu_memory_utilization": 0.80,
+                "max_num_seqs": 128
+            }
+        }"#;
+
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.runner, RunnerType::Docker);
+        assert_eq!(config.source, Some("RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4".to_string()));
+
+        let docker = config.docker.as_ref().unwrap();
+        assert_eq!(docker.image, Some("dgx-vllm:cutlass-nvfp4".to_string()));
+        assert_eq!(docker.network, "host");
+        assert_eq!(docker.gpus, Some("all".to_string()));
+        assert_eq!(docker.ipc, Some("host".to_string()));
+        assert_eq!(docker.volumes.len(), 1);
+        assert!(docker.extra_args.as_ref().unwrap().contains("--swap-space 32"));
+
+        assert!(config.parameters.contains_key("tensor_parallel_size"));
+        assert!(config.parameters.contains_key("max_model_len"));
+    }
+
+    #[test]
+    fn test_parse_docker_with_registry() {
+        let json = r#"{
+            "runner": "docker",
+            "source": "meta-llama/Llama-2-7b",
+            "docker": {
+                "image": "vllm-openai:latest",
+                "registry": {
+                    "url": "ghcr.io",
+                    "username": "myuser",
+                    "token": "${GHCR_TOKEN}"
+                },
+                "gpus": "0,1"
+            }
+        }"#;
+
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        let docker = config.docker.as_ref().unwrap();
+        let registry = docker.registry.as_ref().unwrap();
+
+        assert_eq!(registry.url, Some("ghcr.io".to_string()));
+        assert_eq!(registry.username, Some("myuser".to_string()));
+        assert_eq!(registry.token, Some("${GHCR_TOKEN}".to_string()));
+    }
+
+    #[test]
+    fn test_parse_docker_with_dockerfile() {
+        let json = r#"{
+            "runner": "docker",
+            "source": "my-model",
+            "docker": {
+                "dockerfile": "./docker/Dockerfile.vllm",
+                "context": "./docker"
+            }
+        }"#;
+
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        let docker = config.docker.as_ref().unwrap();
+
+        assert!(docker.image.is_none());
+        assert_eq!(docker.dockerfile, Some("./docker/Dockerfile.vllm".to_string()));
+        assert_eq!(docker.context, Some("./docker".to_string()));
+    }
+
+    #[test]
+    fn test_docker_builder() {
+        let docker_config = DockerConfig {
+            image: Some("my-image:v1".to_string()),
+            network: "host".to_string(),
+            gpus: Some("all".to_string()),
+            ..Default::default()
+        };
+
+        let config = ModelConfig::docker("my-model", docker_config);
+        assert_eq!(config.runner, RunnerType::Docker);
+        assert_eq!(config.source, Some("my-model".to_string()));
+        assert!(config.docker.is_some());
     }
 }

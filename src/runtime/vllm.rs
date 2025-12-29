@@ -4,6 +4,7 @@
 //! and CLI arguments for launching vLLM OpenAI-compatible API servers.
 
 use std::collections::HashMap;
+use std::process::Command as StdCommand;
 
 use serde_json::Value;
 
@@ -100,6 +101,84 @@ pub fn default_params() -> HashMap<String, Value> {
     params
 }
 
+// ============================================================================
+// I/O: System checks
+// ============================================================================
+
+/// Check if vLLM is installed
+pub fn is_vllm_installed() -> bool {
+    StdCommand::new("python")
+        .args(["-c", "import vllm"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if CUDA is available
+pub fn is_cuda_available() -> bool {
+    StdCommand::new("python")
+        .args(["-c", "import torch; assert torch.cuda.is_available()"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Get the number of available GPUs
+pub fn gpu_count() -> usize {
+    StdCommand::new("python")
+        .args(["-c", "import torch; print(torch.cuda.device_count())"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Get HuggingFace token from environment or config
+pub fn get_hf_token() -> Option<String> {
+    // Try HF_TOKEN first (newer standard)
+    if let Ok(token) = std::env::var("HF_TOKEN") {
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+    // Fall back to HUGGING_FACE_HUB_TOKEN
+    if let Ok(token) = std::env::var("HUGGING_FACE_HUB_TOKEN") {
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+    None
+}
+
+/// Check if a model requires authentication (gated models)
+pub fn model_requires_auth(model: &str) -> bool {
+    // Common gated model prefixes
+    let gated_prefixes = [
+        "meta-llama/",
+        "mistralai/Mistral",
+        "google/gemma",
+        "Qwen/",
+    ];
+
+    gated_prefixes.iter().any(|prefix| model.starts_with(prefix))
+}
+
+/// Generate environment variables for vLLM process
+pub fn generate_env_vars(hf_token: Option<&str>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+
+    if let Some(token) = hf_token {
+        env.insert("HF_TOKEN".to_string(), token.to_string());
+        env.insert("HUGGING_FACE_HUB_TOKEN".to_string(), token.to_string());
+    }
+
+    // Disable tokenizer parallelism warning
+    env.insert("TOKENIZERS_PARALLELISM".to_string(), "false".to_string());
+
+    env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +242,33 @@ mod tests {
         let params = default_params();
         assert!(params.contains_key("gpu_memory_utilization"));
         assert!(params.contains_key("dtype"));
+    }
+
+    #[test]
+    fn test_model_requires_auth() {
+        assert!(model_requires_auth("meta-llama/Llama-2-7b-hf"));
+        assert!(model_requires_auth("mistralai/Mistral-7B-v0.1"));
+        assert!(model_requires_auth("google/gemma-7b"));
+        assert!(model_requires_auth("Qwen/Qwen-7B"));
+        assert!(!model_requires_auth("facebook/opt-125m"));
+        assert!(!model_requires_auth("gpt2"));
+    }
+
+    #[test]
+    fn test_generate_env_vars_with_token() {
+        let env = generate_env_vars(Some("hf_test_token"));
+        assert_eq!(env.get("HF_TOKEN"), Some(&"hf_test_token".to_string()));
+        assert_eq!(
+            env.get("HUGGING_FACE_HUB_TOKEN"),
+            Some(&"hf_test_token".to_string())
+        );
+        assert_eq!(env.get("TOKENIZERS_PARALLELISM"), Some(&"false".to_string()));
+    }
+
+    #[test]
+    fn test_generate_env_vars_without_token() {
+        let env = generate_env_vars(None);
+        assert!(env.get("HF_TOKEN").is_none());
+        assert_eq!(env.get("TOKENIZERS_PARALLELISM"), Some(&"false".to_string()));
     }
 }
