@@ -1,16 +1,203 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-/// Model definition types that can be specified in the composition file.
-/// Using tagged union for cleaner JSON representation.
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Runner type for model execution
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunnerType {
+    /// External API endpoint (e.g., OpenAI, Anthropic, self-hosted)
+    #[default]
+    External,
+    /// Ollama local runner
+    Ollama,
+    /// vLLM local runner
+    Vllm,
+    /// llama.cpp local runner
+    LlamaCpp,
+    /// Docker-based runner
+    Docker,
+}
+
+impl RunnerType {
+    /// Get the default port for this runner type
+    pub fn default_port(&self) -> Option<u16> {
+        match self {
+            RunnerType::External => None,
+            RunnerType::Ollama => Some(11434),
+            RunnerType::Vllm => Some(8000),
+            RunnerType::LlamaCpp => Some(8080),
+            RunnerType::Docker => None,
+        }
+    }
+
+    /// Check if this runner needs to be spawned as a subprocess
+    pub fn is_local_runner(&self) -> bool {
+        matches!(self, RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp)
+    }
+}
+
+/// Unified model configuration
+///
+/// This structure supports all model types through a common interface:
+/// - `runner`: The execution backend (external, ollama, vllm, llama-cpp, docker)
+/// - `interface`: The API protocol (openai-api)
+/// - `source`: Model file, URL, HuggingFace repo, or model name
+/// - `endpoint`: Explicit endpoint URL (for external runners)
+/// - `parameters`: Runner-specific parameters
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ModelConfig {
+    /// Runner type: external, ollama, vllm, llama-cpp, docker
+    #[serde(default)]
+    pub runner: RunnerType,
+
+    /// API interface: openai-api (default)
+    #[serde(default = "default_interface")]
+    pub interface: String,
+
+    /// Model source: URL, local path, HF repo, or model name
+    /// - External: not used (use endpoint instead)
+    /// - Ollama: model name (e.g., "tinyllama:1.1b") or Modelfile path
+    /// - vLLM: HuggingFace repo (e.g., "meta-llama/Llama-2-7b-hf")
+    /// - llama.cpp: GGUF file path or URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Endpoint URL (required for external, auto-generated for local runners)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+
+    /// API key for authentication
+    #[serde(rename = "api-key", skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
+    /// Runner-specific parameters
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub parameters: HashMap<String, Value>,
+}
+
+fn default_interface() -> String {
+    "openai-api".to_string()
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            runner: RunnerType::External,
+            interface: default_interface(),
+            source: None,
+            endpoint: None,
+            api_key: None,
+            parameters: HashMap::new(),
+        }
+    }
+}
+
+impl ModelConfig {
+    /// Create a new external model configuration
+    pub fn external(endpoint: impl Into<String>) -> Self {
+        Self {
+            runner: RunnerType::External,
+            endpoint: Some(endpoint.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a new Ollama model configuration
+    pub fn ollama(source: impl Into<String>) -> Self {
+        Self {
+            runner: RunnerType::Ollama,
+            source: Some(source.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a new vLLM model configuration
+    pub fn vllm(source: impl Into<String>) -> Self {
+        Self {
+            runner: RunnerType::Vllm,
+            source: Some(source.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a new llama.cpp model configuration
+    pub fn llamacpp(source: impl Into<String>) -> Self {
+        Self {
+            runner: RunnerType::LlamaCpp,
+            source: Some(source.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Add an API key
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+
+    /// Add parameters
+    pub fn with_parameters(mut self, params: HashMap<String, Value>) -> Self {
+        self.parameters = params;
+        self
+    }
+
+    /// Add a single parameter
+    pub fn with_parameter(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.parameters.insert(key.into(), value);
+        self
+    }
+
+    /// Get the effective endpoint URL
+    ///
+    /// For external runners, returns the configured endpoint.
+    /// For local runners, generates based on runner defaults.
+    pub fn effective_endpoint(&self, host: &str, port: Option<u16>) -> Option<String> {
+        if let Some(endpoint) = &self.endpoint {
+            return Some(endpoint.clone());
+        }
+
+        let port = port.or_else(|| self.runner.default_port())?;
+
+        Some(match self.runner {
+            RunnerType::External => return None,
+            RunnerType::Ollama => format!("http://{}:{}/v1", host, port),
+            RunnerType::Vllm => format!("http://{}:{}/v1", host, port),
+            RunnerType::LlamaCpp => format!("http://{}:{}/v1", host, port),
+            RunnerType::Docker => return None,
+        })
+    }
+
+    /// Get the runner type name as a string
+    pub fn type_name(&self) -> &'static str {
+        match self.runner {
+            RunnerType::External => "external",
+            RunnerType::Ollama => "ollama",
+            RunnerType::Vllm => "vllm",
+            RunnerType::LlamaCpp => "llama-cpp",
+            RunnerType::Docker => "docker",
+        }
+    }
+}
+
+// ============================================================================
+// Legacy support: Map old ModelDefinition to new ModelConfig
+// ============================================================================
+
+/// Model definition types (legacy format for backward compatibility)
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ModelDefinition {
     External(ExternalModel),
     Docker(DockerModel),
     Huggingface(HuggingfaceModel),
+    /// New unified format
+    #[serde(untagged)]
+    Unified(ModelConfig),
 }
 
-/// External OpenAI-compatible API endpoint
+/// External OpenAI-compatible API endpoint (legacy)
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ExternalModel {
     pub interface: String,
@@ -19,7 +206,7 @@ pub struct ExternalModel {
     pub api_key: Option<String>,
 }
 
-/// Docker-based model runner
+/// Docker-based model runner (legacy)
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct DockerModel {
     pub image: String,
@@ -28,7 +215,7 @@ pub struct DockerModel {
     pub params: Option<String>,
 }
 
-/// HuggingFace model with runner specification
+/// HuggingFace model with runner specification (legacy)
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct HuggingfaceModel {
     pub url: String,
@@ -43,6 +230,46 @@ impl ModelDefinition {
             ModelDefinition::External(_) => "external",
             ModelDefinition::Docker(_) => "docker",
             ModelDefinition::Huggingface(_) => "huggingface",
+            ModelDefinition::Unified(config) => config.type_name(),
+        }
+    }
+
+    /// Convert to unified ModelConfig
+    pub fn to_config(&self) -> ModelConfig {
+        match self {
+            ModelDefinition::External(ext) => ModelConfig {
+                runner: RunnerType::External,
+                interface: ext.interface.clone(),
+                endpoint: Some(ext.url.clone()),
+                api_key: ext.api_key.clone(),
+                source: None,
+                parameters: HashMap::new(),
+            },
+            ModelDefinition::Docker(docker) => ModelConfig {
+                runner: RunnerType::Docker,
+                interface: "openai-api".to_string(),
+                source: Some(docker.image.clone()),
+                endpoint: None,
+                api_key: None,
+                parameters: HashMap::new(),
+            },
+            ModelDefinition::Huggingface(hf) => {
+                let runner = match hf.runner.as_str() {
+                    "ollama" => RunnerType::Ollama,
+                    "vllm" => RunnerType::Vllm,
+                    "llama-cpp" | "llamacpp" => RunnerType::LlamaCpp,
+                    _ => RunnerType::External,
+                };
+                ModelConfig {
+                    runner,
+                    interface: "openai-api".to_string(),
+                    source: Some(hf.url.clone()),
+                    endpoint: None,
+                    api_key: None,
+                    parameters: HashMap::new(),
+                }
+            }
+            ModelDefinition::Unified(config) => config.clone(),
         }
     }
 }
@@ -52,7 +279,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_external_model() {
+    fn test_parse_external_model_legacy() {
         let json = r#"{
             "type": "external",
             "interface": "openai-api",
@@ -72,49 +299,109 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_huggingface_model() {
+    fn test_parse_unified_model() {
         let json = r#"{
-            "type": "huggingface",
-            "url": "cyankiwi/Nemotron-Orchestrator-8B-AWQ-4bit",
-            "runner": "ollama"
+            "runner": "ollama",
+            "interface": "openai-api",
+            "source": "tinyllama:1.1b",
+            "parameters": {
+                "temperature": 0.7,
+                "num_ctx": 2048
+            }
         }"#;
 
-        let model: ModelDefinition = serde_json::from_str(json).unwrap();
-        match model {
-            ModelDefinition::Huggingface(hf) => {
-                assert_eq!(hf.url, "cyankiwi/Nemotron-Orchestrator-8B-AWQ-4bit");
-                assert_eq!(hf.runner, "ollama");
-                assert_eq!(hf.hf_pat, None);
-            }
-            _ => panic!("Expected Huggingface model"),
-        }
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.runner, RunnerType::Ollama);
+        assert_eq!(config.source, Some("tinyllama:1.1b".to_string()));
+        assert!(config.parameters.contains_key("temperature"));
     }
 
     #[test]
-    fn test_parse_docker_model() {
+    fn test_parse_vllm_model() {
         let json = r#"{
-            "type": "docker",
-            "image": "some-image-name",
-            "params": "vllm serve --model foo"
+            "runner": "vllm",
+            "source": "meta-llama/Llama-2-7b-hf",
+            "parameters": {
+                "tensor_parallel_size": 2
+            }
         }"#;
 
-        let model: ModelDefinition = serde_json::from_str(json).unwrap();
-        match model {
-            ModelDefinition::Docker(docker) => {
-                assert_eq!(docker.image, "some-image-name");
-                assert_eq!(docker.params, Some("vllm serve --model foo".to_string()));
-            }
-            _ => panic!("Expected Docker model"),
-        }
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.runner, RunnerType::Vllm);
+        assert_eq!(config.interface, "openai-api");
     }
 
     #[test]
-    fn test_type_name() {
-        let ext = ModelDefinition::External(ExternalModel {
+    fn test_parse_llamacpp_model() {
+        let json = r#"{
+            "runner": "llama-cpp",
+            "source": "/path/to/model.gguf",
+            "parameters": {
+                "n_ctx": 4096,
+                "n_gpu_layers": 35
+            }
+        }"#;
+
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.runner, RunnerType::LlamaCpp);
+    }
+
+    #[test]
+    fn test_runner_default_ports() {
+        assert_eq!(RunnerType::External.default_port(), None);
+        assert_eq!(RunnerType::Ollama.default_port(), Some(11434));
+        assert_eq!(RunnerType::Vllm.default_port(), Some(8000));
+        assert_eq!(RunnerType::LlamaCpp.default_port(), Some(8080));
+    }
+
+    #[test]
+    fn test_effective_endpoint() {
+        let config = ModelConfig::ollama("tinyllama:1.1b");
+        assert_eq!(
+            config.effective_endpoint("localhost", None),
+            Some("http://localhost:11434/v1".to_string())
+        );
+
+        let config = ModelConfig::vllm("llama2");
+        assert_eq!(
+            config.effective_endpoint("0.0.0.0", Some(9000)),
+            Some("http://0.0.0.0:9000/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_model_builders() {
+        use serde_json::Number;
+        let ollama = ModelConfig::ollama("tinyllama:1.1b")
+            .with_parameter("temperature".to_string(), Value::Number(Number::from_f64(0.7).unwrap()));
+        assert_eq!(ollama.runner, RunnerType::Ollama);
+        assert!(ollama.parameters.contains_key("temperature"));
+
+        let external = ModelConfig::external("http://api.example.com")
+            .with_api_key("sk-test");
+        assert_eq!(external.runner, RunnerType::External);
+        assert_eq!(external.api_key, Some("sk-test".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_to_config() {
+        let legacy = ModelDefinition::External(ExternalModel {
             interface: "openai-api".to_string(),
             url: "http://test".to_string(),
-            api_key: None,
+            api_key: Some("key".to_string()),
         });
-        assert_eq!(ext.type_name(), "external");
+
+        let config = legacy.to_config();
+        assert_eq!(config.runner, RunnerType::External);
+        assert_eq!(config.endpoint, Some("http://test".to_string()));
+    }
+
+    #[test]
+    fn test_is_local_runner() {
+        assert!(!RunnerType::External.is_local_runner());
+        assert!(RunnerType::Ollama.is_local_runner());
+        assert!(RunnerType::Vllm.is_local_runner());
+        assert!(RunnerType::LlamaCpp.is_local_runner());
+        assert!(!RunnerType::Docker.is_local_runner());
     }
 }
