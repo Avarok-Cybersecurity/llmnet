@@ -86,6 +86,11 @@ pub struct ServeArgs {
     #[arg(long, default_value = "0.0.0.0")]
     pub bind_addr: String,
 
+    /// Advertise address for the worker (how control plane can reach this worker)
+    /// If not specified, uses bind_addr (must be reachable, not 0.0.0.0)
+    #[arg(long)]
+    pub advertise_addr: Option<String>,
+
     /// Port to listen on (default: 8181 for control plane, 8080 for worker)
     #[arg(short, long)]
     pub port: Option<u16>,

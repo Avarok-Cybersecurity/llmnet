@@ -129,8 +129,10 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
             );
 
             // Register node with control plane
+            // Use advertise_addr if specified, otherwise use bind_addr
+            let advertise_addr = args.advertise_addr.as_deref().unwrap_or(&args.bind_addr);
             let client = reqwest::Client::new();
-            let node = Node::new(&node_name, &args.bind_addr).with_port(port);
+            let node = Node::new(&node_name, advertise_addr).with_port(port);
 
             match client
                 .post(format!("{}/v1/nodes", cp_url))
