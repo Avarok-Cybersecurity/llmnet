@@ -1,0 +1,19 @@
+[book]
+title = "llmnet - LLM Pipeline Orchestration"
+authors = ["llmnet contributors"]
+description = "The future is small models routed to — intelligently"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../../target/book"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/your-org/llmnet"
+edit-url-template = "https://github.com/your-org/llmnet/edit/main/docs/book/{path}"
+
+[output.html.fold]
+enable = true
+level = 1

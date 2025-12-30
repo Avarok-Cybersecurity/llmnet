@@ -205,6 +205,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::NodeHooks;
     use std::collections::HashMap;
 
     #[test]
@@ -222,6 +223,7 @@ mod tests {
             url: None,
             context: None,
             extra_options: HashMap::new(),
+            hooks: NodeHooks::default(),
         };
         assert_eq!(AdapterType::from_node(&node1), AdapterType::OpenAiApi);
 
@@ -238,6 +240,7 @@ mod tests {
             url: None,
             context: None,
             extra_options: HashMap::new(),
+            hooks: NodeHooks::default(),
         };
         assert_eq!(AdapterType::from_node(&node2), AdapterType::Output);
 
@@ -254,6 +257,7 @@ mod tests {
             url: Some("ws://localhost:3000".to_string()),
             context: None,
             extra_options: HashMap::new(),
+            hooks: NodeHooks::default(),
         };
         assert!(matches!(AdapterType::from_node(&node3), AdapterType::WebSocket { .. }));
     }
@@ -273,6 +277,7 @@ mod tests {
             url: None,
             context: None,
             extra_options: HashMap::new(),
+            hooks: NodeHooks::default(),
         };
 
         let runtime = RuntimeNode::from_architecture(&arch_node, None, 0);

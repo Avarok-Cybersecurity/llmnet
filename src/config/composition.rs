@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::architecture::{ArchitectureNode, OutputTarget};
+use super::functions::FunctionType;
 use super::models::ModelDefinition;
+use super::secrets::SecretSource;
 
 /// Errors that can occur during composition parsing and validation
 #[derive(Error, Debug, PartialEq)]
@@ -26,6 +28,9 @@ pub enum CompositionError {
 
     #[error("Duplicate node name: '{0}'")]
     DuplicateNodeName(String),
+
+    #[error("Function '{0}' referenced by hook in node '{1}' is not defined")]
+    UndefinedFunction(String, String),
 }
 
 /// The complete composition file structure
@@ -33,6 +38,12 @@ pub enum CompositionError {
 pub struct Composition {
     pub models: HashMap<String, ModelDefinition>,
     pub architecture: Vec<ArchitectureNode>,
+    /// Secret sources for credential management
+    #[serde(default)]
+    pub secrets: HashMap<String, SecretSource>,
+    /// Reusable function definitions for hooks
+    #[serde(default)]
+    pub functions: HashMap<String, FunctionType>,
 }
 
 // ============================================================================
@@ -159,6 +170,26 @@ pub fn validate_composition(composition: &Composition) -> Result<(), Composition
     let has_output = composition.architecture.iter().any(|n| n.is_output());
     if !has_output {
         return Err(CompositionError::NoOutputNode);
+    }
+
+    // Check that all hook function references exist
+    for node in &composition.architecture {
+        for hook in &node.hooks.pre {
+            if !composition.functions.contains_key(&hook.function) {
+                return Err(CompositionError::UndefinedFunction(
+                    hook.function.clone(),
+                    node.name.clone(),
+                ));
+            }
+        }
+        for hook in &node.hooks.post {
+            if !composition.functions.contains_key(&hook.function) {
+                return Err(CompositionError::UndefinedFunction(
+                    hook.function.clone(),
+                    node.name.clone(),
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -425,5 +456,89 @@ mod tests {
         let comp = Composition::from_str(json).unwrap();
         assert!(comp.node_by_name("router").is_some());
         assert!(comp.node_by_name("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_parse_with_secrets_and_functions() {
+        let json = r#"{
+            "models": {},
+            "secrets": {
+                "api-keys": {
+                    "source": "env-file",
+                    "path": "~/.secrets/.env",
+                    "variables": ["API_KEY"]
+                }
+            },
+            "functions": {
+                "log-request": {
+                    "type": "rest",
+                    "method": "POST",
+                    "url": "https://api.example.com/log"
+                }
+            },
+            "architecture": [
+                {"name": "router", "layer": 0, "adapter": "openai-api"},
+                {"name": "final-output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json).unwrap();
+        assert_eq!(comp.secrets.len(), 1);
+        assert!(comp.secrets.contains_key("api-keys"));
+        assert_eq!(comp.functions.len(), 1);
+        assert!(comp.functions.contains_key("log-request"));
+    }
+
+    #[test]
+    fn test_validate_undefined_function() {
+        let json = r#"{
+            "models": {},
+            "functions": {},
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "adapter": "openai-api",
+                    "hooks": {
+                        "pre": [{"function": "nonexistent"}]
+                    }
+                },
+                {"name": "final-output", "adapter": "output"}
+            ]
+        }"#;
+
+        let result = Composition::from_str(json);
+        assert!(matches!(
+            result,
+            Err(CompositionError::UndefinedFunction(name, _)) if name == "nonexistent"
+        ));
+    }
+
+    #[test]
+    fn test_valid_hook_function_reference() {
+        let json = r#"{
+            "models": {},
+            "functions": {
+                "my-hook": {
+                    "type": "shell",
+                    "command": "echo",
+                    "args": ["hello"]
+                }
+            },
+            "architecture": [
+                {
+                    "name": "router",
+                    "layer": 0,
+                    "adapter": "openai-api",
+                    "hooks": {
+                        "post": [{"function": "my-hook"}]
+                    }
+                },
+                {"name": "final-output", "adapter": "output"}
+            ]
+        }"#;
+
+        let comp = Composition::from_str(json);
+        assert!(comp.is_ok());
     }
 }

@@ -1,5 +1,6 @@
 pub mod docker;
 pub mod fetch;
+pub mod hooks;
 pub mod llamacpp;
 pub mod node;
 pub mod ollama;
@@ -11,6 +12,7 @@ pub mod runner;
 pub mod vllm;
 
 pub use docker::DockerConfig;
+pub use hooks::{HookContext, HookError, HookExecutor};
 pub use fetch::{classify_path, fetch_file, PathType};
 pub use node::RuntimeNode;
 pub use ollama::Modelfile;

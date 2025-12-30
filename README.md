@@ -89,6 +89,7 @@ Each example includes real-world use cases showing how the same topology applies
 | **Multi-Layer Pipeline** | 1-2-1-1 | Add refinement layer | [📖 Guide](docs/examples/multi-layer-pipeline.md) |
 | **Conditional Routing** | 1-2-1 | Route by input characteristics | [📖 Guide](docs/examples/conditional-routing.md) |
 | **Nemotron Router** | 1-2-2-1 | Enterprise with edge cases | [📖 Guide](docs/examples/nemotron-router.md) |
+| **Calculator with Hooks** | 1-2-1 | Validation hooks demo | [📖 Guide](docs/book/src/examples/multiplication-calculator.md) |
 
 ### Quick Topology Reference
 
@@ -144,19 +145,26 @@ flowchart TB
 | **Router** | Layer 0 model that selects which downstream node handles the request |
 | **Condition** | Rule using system variables (`$WORD_COUNT > 10`) to filter targets |
 | **Adapter** | Protocol: `openai-api`, `output`, or `ws` (WebSocket) |
+| **Hooks** | Pre/post execution logic (observe or transform mode) |
+| **Functions** | Reusable operations: REST, Shell, WebSocket, gRPC |
+| **Secrets** | Credentials from env files, system env, or Vault |
 
 ### System Variables
 
-Available in conditions for rule-based routing:
+Available in conditions and hooks:
 
-| Variable | Description | Example Use |
-|----------|-------------|-------------|
-| `$WORD_COUNT` | Number of words in input | `$WORD_COUNT < 10` |
-| `$INPUT_LENGTH` | Character count | `$INPUT_LENGTH > 500` |
-| `$PREV_NODE` | Previous node name | `$PREV_NODE == "router"` |
-| `$HOP_COUNT` | Number of hops so far | `$HOP_COUNT < 5` |
-| `$TIMESTAMP` | Unix timestamp | Time-based routing |
-| `$REQUEST_ID` | Unique request UUID | A/B testing |
+| Variable | Context | Description |
+|----------|---------|-------------|
+| `$INPUT` | Pre/Post hooks | Current input content |
+| `$OUTPUT` | Post hooks only | LLM output |
+| `$NODE` | Pre/Post hooks | Current node name |
+| `$PREV_NODE` | All | Previous node name |
+| `$WORD_COUNT` | All | Number of words in input |
+| `$INPUT_LENGTH` | All | Character count |
+| `$HOP_COUNT` | All | Number of hops so far |
+| `$TIMESTAMP` | All | ISO 8601 timestamp |
+| `$REQUEST_ID` | All | Unique request UUID |
+| `$secrets.*` | Functions | Secret values |
 
 See [Conditional Routing Guide](docs/examples/conditional-routing.md) for full documentation.
 
@@ -239,6 +247,101 @@ See [Conditional Routing Guide](docs/examples/conditional-routing.md) for full d
 | `output-to` | array | Layer numbers `[1]` or node names `["output"]` |
 | `use-case` | string? | Description for LLM-based routing |
 | `if` | string? | Condition for rule-based routing |
+| `hooks` | object? | Pre/post hooks for the node |
+
+### Secrets Section
+
+Load credentials from various sources:
+
+```json
+{
+  "secrets": {
+    "api-creds": {
+      "source": "env-file",
+      "path": "~/.config/llmnet/.env",
+      "variables": ["API_KEY", "API_SECRET"]
+    },
+    "hf-token": {
+      "source": "env",
+      "variable": "HF_TOKEN"
+    },
+    "vault-secrets": {
+      "source": "vault",
+      "address": "https://vault.example.com",
+      "path": "secret/data/llmnet/api"
+    }
+  }
+}
+```
+
+Reference secrets using `$secrets.{name}.{variable}`:
+
+```json
+"api-key": "$secrets.api-creds.API_KEY"
+```
+
+### Functions Section
+
+Define reusable operations for hooks:
+
+```json
+{
+  "functions": {
+    "log-request": {
+      "type": "rest",
+      "method": "POST",
+      "url": "https://api.example.com/log",
+      "headers": {"Authorization": "Bearer $secrets.api.TOKEN"},
+      "body": {"node": "$NODE", "input": "$INPUT"}
+    },
+    "validate-output": {
+      "type": "shell",
+      "command": "python",
+      "args": ["validate.py", "--input", "$OUTPUT"],
+      "timeout": 10
+    }
+  }
+}
+```
+
+| Type | Description |
+|------|-------------|
+| `rest` | HTTP requests (GET, POST, PUT, PATCH, DELETE) |
+| `shell` | Execute local commands |
+| `websocket` | Send WebSocket messages |
+| `grpc` | Call gRPC services |
+
+### Hooks Section
+
+Execute logic before/after LLM calls:
+
+```json
+{
+  "architecture": [
+    {
+      "name": "processor",
+      "hooks": {
+        "pre": [
+          {"function": "log-request", "mode": "observe"}
+        ],
+        "post": [
+          {"function": "validate-output", "mode": "transform", "on_failure": "abort"}
+        ]
+      }
+    }
+  ]
+}
+```
+
+| Mode | Behavior |
+|------|----------|
+| `observe` | Fire-and-forget, doesn't affect pipeline |
+| `transform` | Waits for result, can modify data |
+
+| on_failure | Behavior |
+|------------|----------|
+| `continue` | Log error, proceed with original data |
+| `abort` | Stop pipeline, return error |
 
 ---
 

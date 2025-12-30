@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use serde_json::Value;
 use thiserror::Error;
+use tracing::debug;
 
 use crate::client::{ChatCompletionRequest as ClientRequest, Message, OpenAiClient, OpenAiClientTrait};
-use crate::config::{Composition, ModelDefinition, OutputTarget};
+use crate::config::{Composition, FunctionExecutor, ModelDefinition, OutputTarget, SecretsManager};
+use crate::runtime::hooks::{HookContext, HookError, HookExecutor};
 use crate::runtime::node::{evaluate_condition, RuntimeNode};
 use crate::runtime::request::PipelineRequest;
 use crate::runtime::router::{build_routing_prompt, extract_node_selection, NodeMetadata};
@@ -30,6 +34,9 @@ pub enum ProcessorError {
 
     #[error("Invalid model type for handler '{0}': expected external")]
     InvalidModelType(String),
+
+    #[error("Hook error: {0}")]
+    HookError(#[from] HookError),
 }
 
 /// Processes requests through the LLM pipeline
@@ -38,13 +45,24 @@ pub struct PipelineProcessor {
     clients: HashMap<String, OpenAiClient>,
     router_node_name: String,
     router_model_name: String,
+    hook_executor: Option<HookExecutor>,
+    arch_nodes: HashMap<String, crate::config::ArchitectureNode>,
 }
 
 impl PipelineProcessor {
     /// Create a new pipeline processor from a composition
     pub fn new(composition: &Composition) -> Result<Self, ProcessorError> {
+        Self::new_with_secrets(composition, Arc::new(SecretsManager::new()))
+    }
+
+    /// Create a new pipeline processor with a pre-loaded secrets manager
+    pub fn new_with_secrets(
+        composition: &Composition,
+        secrets: Arc<SecretsManager>,
+    ) -> Result<Self, ProcessorError> {
         let mut nodes = HashMap::new();
         let mut clients = HashMap::new();
+        let mut arch_nodes = HashMap::new();
         let mut router_node_name = None;
         let mut router_model_name = None;
 
@@ -81,6 +99,7 @@ impl PipelineProcessor {
                 });
             }
 
+            arch_nodes.insert(runtime.name.clone(), arch_node.clone());
             nodes.insert(runtime.name.clone(), runtime);
             port_offset += 1;
         }
@@ -88,11 +107,21 @@ impl PipelineProcessor {
         let router_node_name = router_node_name.ok_or(ProcessorError::NoRouter)?;
         let router_model_name = router_model_name.ok_or(ProcessorError::RouterModelNotConfigured)?;
 
+        // Initialize hook executor if functions are defined
+        let hook_executor = if !composition.functions.is_empty() {
+            let function_executor = Arc::new(FunctionExecutor::new(secrets));
+            Some(HookExecutor::new(function_executor, composition.functions.clone()))
+        } else {
+            None
+        };
+
         Ok(Self {
             nodes,
             clients,
             router_node_name,
             router_model_name,
+            hook_executor,
+            arch_nodes,
         })
     }
 
@@ -144,11 +173,110 @@ impl PipelineProcessor {
             let target_layer = self.nodes.get(&selected_target).map(|n| n.layer).unwrap_or(0);
             request.add_hop(selected_target.clone(), target_layer, Some(selected_target.clone()));
 
+            // Execute pre-hooks for the target node
+            let input_content = self
+                .execute_pre_hooks(&selected_target, &request)
+                .await?;
+
             // Call the selected node's LLM
-            let new_content = self.call_node_llm(&selected_target, &request.current_content).await?;
-            request.set_content(new_content);
+            let llm_output = self.call_node_llm(&selected_target, &input_content).await?;
+
+            // Execute post-hooks for the target node
+            let final_output = self
+                .execute_post_hooks(&selected_target, &request, &input_content, llm_output)
+                .await?;
+
+            request.set_content(final_output);
             current_node_name = selected_target;
         }
+    }
+
+    /// Execute pre-hooks for a node, returning potentially modified input
+    async fn execute_pre_hooks(
+        &self,
+        node_name: &str,
+        request: &PipelineRequest,
+    ) -> Result<String, ProcessorError> {
+        let Some(hook_executor) = &self.hook_executor else {
+            return Ok(request.current_content.clone());
+        };
+
+        let Some(arch_node) = self.arch_nodes.get(node_name) else {
+            return Ok(request.current_content.clone());
+        };
+
+        if arch_node.hooks.pre.is_empty() {
+            return Ok(request.current_content.clone());
+        }
+
+        debug!("Executing {} pre-hooks for node '{}'", arch_node.hooks.pre.len(), node_name);
+
+        let context = self.build_hook_context(node_name, request);
+        let input = Value::String(request.current_content.clone());
+
+        let result = hook_executor
+            .execute_pre_hooks(&arch_node.hooks, input, &context)
+            .await?;
+
+        // Extract string from result
+        Ok(match result {
+            Value::String(s) => s,
+            other => other.to_string(),
+        })
+    }
+
+    /// Execute post-hooks for a node, returning potentially modified output
+    async fn execute_post_hooks(
+        &self,
+        node_name: &str,
+        request: &PipelineRequest,
+        input: &str,
+        output: String,
+    ) -> Result<String, ProcessorError> {
+        let Some(hook_executor) = &self.hook_executor else {
+            return Ok(output);
+        };
+
+        let Some(arch_node) = self.arch_nodes.get(node_name) else {
+            return Ok(output);
+        };
+
+        if arch_node.hooks.post.is_empty() {
+            return Ok(output);
+        }
+
+        debug!("Executing {} post-hooks for node '{}'", arch_node.hooks.post.len(), node_name);
+
+        let context = self.build_hook_context(node_name, request);
+        let input_value = Value::String(input.to_string());
+        let output_value = Value::String(output);
+
+        let result = hook_executor
+            .execute_post_hooks(&arch_node.hooks, &input_value, output_value, &context)
+            .await?;
+
+        // Extract string from result
+        Ok(match result {
+            Value::String(s) => s,
+            other => other.to_string(),
+        })
+    }
+
+    /// Build hook context from request
+    fn build_hook_context(&self, node_name: &str, request: &PipelineRequest) -> HookContext {
+        let mut context = HookContext::new(node_name, &request.request_id.to_string());
+
+        // Set previous node if available
+        if let Some(prev_hop) = request.trace.last() {
+            context.prev_node = Some(prev_hop.node_name.clone());
+        }
+
+        // Add custom variables from request (String -> Value conversion)
+        for (key, value) in request.get_variables() {
+            context.custom_vars.insert(key.clone(), Value::String(value.clone()));
+        }
+
+        context
     }
 
     /// Get the next target node names from a node's output_targets

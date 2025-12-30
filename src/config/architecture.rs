@@ -1,6 +1,67 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// ============================================================================
+// Hook configuration types
+// ============================================================================
+
+/// Hook execution mode
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookMode {
+    /// Fire-and-forget - doesn't affect pipeline data
+    #[default]
+    Observe,
+    /// Result can modify pipeline input/output
+    Transform,
+}
+
+/// Action to take when a hook fails
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum FailureAction {
+    /// Log error and continue execution
+    #[default]
+    Continue,
+    /// Stop pipeline execution
+    Abort,
+}
+
+/// Configuration for a single hook
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct HookConfig {
+    /// Name of the function to call
+    pub function: String,
+
+    /// Execution mode
+    #[serde(default)]
+    pub mode: HookMode,
+
+    /// What to do on failure
+    #[serde(default, rename = "on_failure")]
+    pub on_failure: FailureAction,
+
+    /// Optional condition for hook execution (uses same syntax as node conditions)
+    #[serde(rename = "if", skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+}
+
+/// Pre and post hooks for an architecture node
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct NodeHooks {
+    /// Hooks executed before node processing
+    #[serde(default)]
+    pub pre: Vec<HookConfig>,
+
+    /// Hooks executed after node processing
+    #[serde(default)]
+    pub post: Vec<HookConfig>,
+}
+
+// ============================================================================
+// Architecture node definition
+// ============================================================================
+
 /// Architecture node definition from the composition file
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ArchitectureNode {
@@ -42,6 +103,10 @@ pub struct ArchitectureNode {
 
     #[serde(rename = "extra-options", default)]
     pub extra_options: HashMap<String, serde_json::Value>,
+
+    /// Pre and post execution hooks
+    #[serde(default)]
+    pub hooks: NodeHooks,
 }
 
 /// Output target specification - can be layers or specific nodes
@@ -170,6 +235,7 @@ mod tests {
             url: None,
             context: None,
             extra_options: HashMap::new(),
+            hooks: NodeHooks::default(),
         };
         assert_eq!(node.effective_bind_addr(), "0.0.0.0");
     }
@@ -186,5 +252,79 @@ mod tests {
 
         let node: ArchitectureNode = serde_json::from_str(json).unwrap();
         assert_eq!(node.context, Some("gpu-cluster".to_string()));
+    }
+
+    #[test]
+    fn test_parse_hook_config() {
+        let json = r#"{
+            "function": "log-request",
+            "mode": "observe",
+            "on_failure": "continue"
+        }"#;
+
+        let hook: HookConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(hook.function, "log-request");
+        assert_eq!(hook.mode, HookMode::Observe);
+        assert_eq!(hook.on_failure, FailureAction::Continue);
+        assert!(hook.condition.is_none());
+    }
+
+    #[test]
+    fn test_parse_hook_config_with_condition() {
+        let json = r#"{
+            "function": "validate-output",
+            "mode": "transform",
+            "on_failure": "abort",
+            "if": "$OUTPUT.valid == true"
+        }"#;
+
+        let hook: HookConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(hook.function, "validate-output");
+        assert_eq!(hook.mode, HookMode::Transform);
+        assert_eq!(hook.on_failure, FailureAction::Abort);
+        assert_eq!(hook.condition, Some("$OUTPUT.valid == true".to_string()));
+    }
+
+    #[test]
+    fn test_parse_hook_config_defaults() {
+        let json = r#"{"function": "simple-hook"}"#;
+
+        let hook: HookConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(hook.function, "simple-hook");
+        assert_eq!(hook.mode, HookMode::Observe); // default
+        assert_eq!(hook.on_failure, FailureAction::Continue); // default
+    }
+
+    #[test]
+    fn test_parse_node_with_hooks() {
+        let json = r#"{
+            "name": "router",
+            "layer": 0,
+            "adapter": "openai-api",
+            "hooks": {
+                "pre": [
+                    {"function": "check-quota", "mode": "transform", "on_failure": "abort"}
+                ],
+                "post": [
+                    {"function": "log-request", "mode": "observe"},
+                    {"function": "validate-output", "mode": "transform", "on_failure": "abort"}
+                ]
+            }
+        }"#;
+
+        let node: ArchitectureNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.hooks.pre.len(), 1);
+        assert_eq!(node.hooks.post.len(), 2);
+        assert_eq!(node.hooks.pre[0].function, "check-quota");
+        assert_eq!(node.hooks.pre[0].mode, HookMode::Transform);
+        assert_eq!(node.hooks.post[0].function, "log-request");
+        assert_eq!(node.hooks.post[0].mode, HookMode::Observe);
+    }
+
+    #[test]
+    fn test_node_hooks_default() {
+        let hooks = NodeHooks::default();
+        assert!(hooks.pre.is_empty());
+        assert!(hooks.post.is_empty());
     }
 }

@@ -34,6 +34,8 @@ thiserror = "2"
 anyhow = "1"
 dashmap = "6"
 futures = "0.3"
+regex = "1"
+shellexpand = "3"
 
 # WebSocket
 tokio-tungstenite = "0.26"
