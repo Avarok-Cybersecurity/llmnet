@@ -397,10 +397,37 @@ pub fn generate_rm_args(container_name: &str) -> Vec<String> {
     vec!["rm".to_string(), "-f".to_string(), container_name.to_string()]
 }
 
-/// Expand environment variables in a string
-/// Supports ${VAR} and $VAR syntax
+/// Expand environment variables and home directory in a string
+/// Supports ${VAR} syntax and ~ for home directory
 pub fn expand_env_vars(input: &str) -> String {
     let mut result = input.to_string();
+
+    // Handle ~ for home directory (must be at start of path or after : for volume mounts)
+    if let Some(home) = std::env::var("HOME").ok().or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().to_string())) {
+        // Handle ~ at the start of the string
+        if result.starts_with("~/") {
+            result = format!("{}{}", home, &result[1..]);
+        } else if result == "~" {
+            result = home.clone();
+        }
+
+        // Handle ~ after : (for volume mounts like "~/.cache:/container/path")
+        // We need to be careful not to replace ~ in the container path
+        if let Some(colon_pos) = result.find(':') {
+            let host_part = &result[..colon_pos];
+            let container_part = &result[colon_pos..];
+
+            let expanded_host = if host_part.starts_with("~/") {
+                format!("{}{}", home, &host_part[1..])
+            } else if host_part == "~" {
+                home.clone()
+            } else {
+                host_part.to_string()
+            };
+
+            result = format!("{}{}", expanded_host, container_part);
+        }
+    }
 
     // Handle ${VAR} syntax
     while let Some(start) = result.find("${") {
@@ -570,6 +597,23 @@ mod tests {
         std::env::set_var("TEST_VAR", "test_value");
         assert_eq!(expand_env_vars("prefix-${TEST_VAR}-suffix"), "prefix-test_value-suffix");
         std::env::remove_var("TEST_VAR");
+    }
+
+    #[test]
+    fn test_expand_home_directory() {
+        let home = std::env::var("HOME").unwrap();
+
+        // Test ~ at start
+        assert_eq!(expand_env_vars("~/.cache"), format!("{}/.cache", home));
+
+        // Test ~ in volume mount (host:container)
+        assert_eq!(
+            expand_env_vars("~/.cache/huggingface:/root/.cache/huggingface"),
+            format!("{}/.cache/huggingface:/root/.cache/huggingface", home)
+        );
+
+        // Test just ~
+        assert_eq!(expand_env_vars("~"), home);
     }
 
     #[test]
