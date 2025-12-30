@@ -220,6 +220,7 @@ mod tests {
             use_case: None,
             condition: None,
             url: None,
+            context: None,
             extra_options: HashMap::new(),
         };
         assert_eq!(AdapterType::from_node(&node1), AdapterType::OpenAiApi);
@@ -235,6 +236,7 @@ mod tests {
             use_case: None,
             condition: None,
             url: None,
+            context: None,
             extra_options: HashMap::new(),
         };
         assert_eq!(AdapterType::from_node(&node2), AdapterType::Output);
@@ -250,6 +252,7 @@ mod tests {
             use_case: None,
             condition: None,
             url: Some("ws://localhost:3000".to_string()),
+            context: None,
             extra_options: HashMap::new(),
         };
         assert!(matches!(AdapterType::from_node(&node3), AdapterType::WebSocket { .. }));
@@ -268,6 +271,7 @@ mod tests {
             use_case: Some("Test use case".to_string()),
             condition: None,
             url: None,
+            context: None,
             extra_options: HashMap::new(),
         };
 

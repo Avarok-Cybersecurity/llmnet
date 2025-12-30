@@ -35,6 +35,11 @@ pub struct ArchitectureNode {
     /// WebSocket URL for "ws" adapter
     pub url: Option<String>,
 
+    /// Deployment context override (default: localhost)
+    /// Use to deploy local runners to remote nodes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
     #[serde(rename = "extra-options", default)]
     pub extra_options: HashMap<String, serde_json::Value>,
 }
@@ -163,8 +168,23 @@ mod tests {
             use_case: None,
             condition: None,
             url: None,
+            context: None,
             extra_options: HashMap::new(),
         };
         assert_eq!(node.effective_bind_addr(), "0.0.0.0");
+    }
+
+    #[test]
+    fn test_parse_node_with_context() {
+        let json = r#"{
+            "name": "remote-model",
+            "layer": 1,
+            "model": "llama-vllm",
+            "adapter": "openai-api",
+            "context": "gpu-cluster"
+        }"#;
+
+        let node: ArchitectureNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.context, Some("gpu-cluster".to_string()));
     }
 }

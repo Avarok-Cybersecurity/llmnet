@@ -1,11 +1,21 @@
+pub mod docker;
+pub mod fetch;
+pub mod llamacpp;
 pub mod node;
+pub mod ollama;
 pub mod orchestrator;
 pub mod processor;
 pub mod request;
 pub mod router;
+pub mod runner;
+pub mod vllm;
 
+pub use docker::DockerConfig;
+pub use fetch::{classify_path, fetch_file, PathType};
 pub use node::RuntimeNode;
+pub use ollama::Modelfile;
 pub use orchestrator::Orchestrator;
 pub use processor::PipelineProcessor;
 pub use request::{PipelineRequest, RequestHop};
 pub use router::Router;
+pub use runner::{new_shared_manager, RunnerManager, SharedRunnerManager};

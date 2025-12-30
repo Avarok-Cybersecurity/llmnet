@@ -50,6 +50,9 @@ serde_yaml = "0.9"
 # Home directory detection
 dirs = "5"
 
+# Hashing for cache keys
+sha2 = "0.10"
+
 # System hostname
 hostname = "0.4"
 
