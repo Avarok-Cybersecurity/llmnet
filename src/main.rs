@@ -12,8 +12,8 @@ use llmnet::cli::{
 };
 use llmnet::runtime::new_shared_manager;
 use llmnet::cluster::{
-    create_control_plane_router, spawn_heartbeat, ControlPlaneState, HeartbeatConfig, Node,
-    NodeCapacity, Pipeline, CONTROL_PLANE_PORT,
+    create_control_plane_router, spawn_heartbeat, spawn_orchestrator, ControlPlaneState,
+    HeartbeatConfig, Node, NodeCapacity, OrchestratorConfig, Pipeline, CONTROL_PLANE_PORT,
 };
 use llmnet::metrics::new_shared_collector;
 use llmnet::config::load_composition_file;
@@ -85,6 +85,14 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
         info!("Starting LLMNet control plane on {}", addr);
 
         let state = ControlPlaneState::new();
+
+        // Spawn the orchestrator to schedule pipelines to workers
+        let _orchestrator_shutdown = spawn_orchestrator(
+            state.controller.clone(),
+            OrchestratorConfig::default(),
+        );
+        info!("Orchestrator started - will schedule pipelines to workers");
+
         let app = create_control_plane_router(state);
 
         let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -157,7 +165,11 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
 
         info!("Starting LLMNet worker '{}' on {}", node_name, addr);
 
+        // Create runner manager for spawning model containers
+        let runner_manager = new_shared_manager();
+
         // For now, run an empty worker that just responds to health checks
+        // and waits for pipeline assignments from the control plane
         let json = r#"{
             "models": {},
             "architecture": [
@@ -166,10 +178,18 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
             ]
         }"#;
         let composition = llmnet::config::Composition::from_str(json)?;
-        let state = AppState::new(composition);
+        let state = AppState::new(composition)
+            .with_runner_manager(runner_manager)
+            .with_bind_addr(&args.bind_addr);
         let app = create_router(state);
 
         let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+        info!("Worker endpoints:");
+        info!("  GET  /health          - Health check");
+        info!("  POST /v1/assignments  - Receive pipeline assignments from control plane");
+        info!("  POST /v1/runners/spawn - Spawn model runners");
+
         axum::serve(listener, app).await?;
     }
 

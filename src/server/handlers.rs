@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::client::Message;
-use crate::config::models::ModelConfig;
+use crate::cluster::{AssignmentResponse, PipelineAssignment};
+use crate::config::models::{ModelConfig, RunnerType};
 use crate::server::state::AppState;
 
 /// OpenAI-compatible chat completion request
@@ -182,6 +183,93 @@ pub async fn stop_runner(
     }
 }
 
+// ============================================================================
+// Pipeline Assignment Endpoint (Worker Mode - receives work from Control Plane)
+// ============================================================================
+
+/// Receive a pipeline assignment from the control plane
+///
+/// This endpoint is called by the control plane orchestrator when scheduling
+/// a pipeline to this worker node. It will:
+/// 1. Spawn any required model runners (Docker, Ollama, etc.)
+/// 2. Initialize the pipeline processor
+/// 3. Return the endpoint where the pipeline is accessible
+pub async fn receive_assignment(
+    State(state): State<AppState>,
+    Json(assignment): Json<PipelineAssignment>,
+) -> impl IntoResponse {
+    tracing::info!(
+        "Received pipeline assignment: {}/{} with {} replicas",
+        assignment.namespace,
+        assignment.name,
+        assignment.replicas
+    );
+
+    // Get the runner manager
+    let Some(manager) = &state.runner_manager else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(AssignmentResponse {
+                success: false,
+                endpoint: None,
+                error: Some("Runner manager not available on this worker".to_string()),
+            }),
+        );
+    };
+
+    // Spawn runners for each model that needs one
+    for (model_name, model_def) in &assignment.composition.models {
+        let config = model_def.to_config();
+
+        // Check if this model needs a runner (Docker, Ollama, vLLM, llama.cpp)
+        let needs_runner = matches!(
+            config.runner,
+            RunnerType::Docker | RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp
+        );
+
+        if needs_runner {
+            tracing::info!("Spawning {} runner for model '{}'...", config.type_name(), model_name);
+
+            match manager.spawn_runner(model_name, &config).await {
+                Ok(endpoint) => {
+                    tracing::info!("Runner for '{}' ready at {}", model_name, endpoint);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to spawn runner for '{}': {}", model_name, e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(AssignmentResponse {
+                            success: false,
+                            endpoint: None,
+                            error: Some(format!("Failed to spawn runner for '{}': {}", model_name, e)),
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    // Build the endpoint URL for this pipeline
+    // In host networking mode, we use the assigned port
+    let endpoint = format!("http://{}:{}", state.bind_addr, assignment.port);
+
+    tracing::info!(
+        "Pipeline {}/{} ready at {}",
+        assignment.namespace,
+        assignment.name,
+        endpoint
+    );
+
+    (
+        StatusCode::OK,
+        Json(AssignmentResponse {
+            success: true,
+            endpoint: Some(endpoint),
+            error: None,
+        }),
+    )
+}
+
 /// Chat completions endpoint (OpenAI-compatible)
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -254,6 +342,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/runners", get(list_runners))
         .route("/v1/runners/spawn", post(spawn_runner))
         .route("/v1/runners/{name}", delete(stop_runner))
+        // Pipeline assignment endpoint (control plane -> worker)
+        .route("/v1/assignments", post(receive_assignment))
         .with_state(state)
 }
 

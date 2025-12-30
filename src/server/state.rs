@@ -14,6 +14,8 @@ pub struct AppState {
     pub active_requests: Arc<DashMap<Uuid, PipelineRequest>>,
     pub processor: Option<Arc<PipelineProcessor>>,
     pub runner_manager: Option<SharedRunnerManager>,
+    /// Bind address for this worker (used in assignment responses)
+    pub bind_addr: String,
 }
 
 impl AppState {
@@ -43,12 +45,19 @@ impl AppState {
             active_requests: Arc::new(DashMap::new()),
             processor,
             runner_manager: None,
+            bind_addr: "0.0.0.0".to_string(),
         }
     }
 
     /// Create with a runner manager for worker mode
     pub fn with_runner_manager(mut self, manager: SharedRunnerManager) -> Self {
         self.runner_manager = Some(manager);
+        self
+    }
+
+    /// Set the bind address
+    pub fn with_bind_addr(mut self, addr: impl Into<String>) -> Self {
+        self.bind_addr = addr.into();
         self
     }
 
