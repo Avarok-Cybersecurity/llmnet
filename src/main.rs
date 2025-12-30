@@ -8,8 +8,9 @@ use llmnet::cli::{
     format_cluster_status, format_context_list, format_current_context, format_dry_run,
     format_namespace_list, format_node_list, format_pipeline_detail, format_pipeline_list,
     format_validation_result, Cli, Commands, ContextAction, ControlPlaneClient, DeleteResource,
-    GetResource,
+    GetResource, KillArgs, StopArgs,
 };
+use llmnet::runtime::new_shared_manager;
 use llmnet::cluster::{
     create_control_plane_router, spawn_heartbeat, ControlPlaneState, HeartbeatConfig, Node,
     NodeCapacity, Pipeline, CONTROL_PLANE_PORT,
@@ -53,6 +54,8 @@ async fn main() {
         Commands::Status => run_status(&config).await,
         Commands::Validate(args) => run_validate(args),
         Commands::Run(args) => run_legacy(args).await,
+        Commands::Stop(args) => run_stop(args).await,
+        Commands::Kill(args) => run_kill(args).await,
     };
 
     if let Err(e) = result {
@@ -369,6 +372,9 @@ fn run_validate(args: llmnet::cli::ValidateArgs) -> Result<(), Box<dyn std::erro
 }
 
 async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use llmnet::config::models::RunnerType;
+    use tokio::signal;
+
     // Load .env file if specified
     if let Some(ref env_file) = args.env_file {
         if let Err(e) = dotenvy::from_path(env_file) {
@@ -378,7 +384,7 @@ async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error
     }
 
     // Load and validate composition
-    let composition = load_composition_file(&args.composition_file)?;
+    let mut composition = load_composition_file(&args.composition_file)?;
 
     // Dry-run mode: print pipeline info and exit
     if args.dry_run {
@@ -387,7 +393,57 @@ async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error
         return Ok(());
     }
 
-    // Create application state
+    // Create runner manager for local runners (Docker, Ollama, vLLM, llama.cpp)
+    let runner_manager = new_shared_manager();
+
+    // Collect models that need runners
+    let models_needing_runners: Vec<_> = composition
+        .models
+        .iter()
+        .filter_map(|(name, def)| {
+            let config = def.to_config();
+            let needs_runner = matches!(
+                config.runner,
+                RunnerType::Docker | RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp
+            );
+            if needs_runner {
+                Some((name.clone(), config))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Spawn runners and collect endpoint updates
+    let mut endpoint_updates: Vec<(String, String)> = Vec::new();
+
+    for (model_name, config) in models_needing_runners {
+        info!("Spawning {} runner for model '{}'...", config.type_name(), model_name);
+
+        match runner_manager.spawn_runner(&model_name, &config).await {
+            Ok(endpoint) => {
+                info!("Runner for '{}' ready at {}", model_name, endpoint);
+                endpoint_updates.push((model_name, endpoint));
+            }
+            Err(e) => {
+                error!("Failed to spawn runner for '{}': {}", model_name, e);
+                // Shutdown any already-spawned runners
+                runner_manager.shutdown_all().await;
+                return Err(e.into());
+            }
+        }
+    }
+
+    // Apply endpoint updates to composition
+    for (model_name, endpoint) in endpoint_updates {
+        if let Some(model) = composition.models.get_mut(&model_name) {
+            let mut updated_config = model.to_config();
+            updated_config.endpoint = Some(endpoint);
+            *model = llmnet::config::models::ModelDefinition::Unified(updated_config);
+        }
+    }
+
+    // Create application state with updated composition
     let state = AppState::new(composition);
 
     // Get router node info for binding
@@ -398,7 +454,7 @@ async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error
     info!("Starting llmnet on {}", addr);
     info!("Loaded {} nodes", state.nodes.len());
 
-    // Create and run the server
+    // Create the router
     let app = create_router(state);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -409,7 +465,83 @@ async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error
     info!("  GET  /status             - Pipeline status");
     info!("  POST /v1/chat/completions - OpenAI-compatible chat endpoint");
 
-    axum::serve(listener, app).await?;
+    // Clone runner_manager for the shutdown handler
+    let shutdown_manager = runner_manager.clone();
+
+    // Spawn the server with graceful shutdown
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let ctrl_c = async {
+            signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to install signal handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+
+        info!("Shutdown signal received, stopping runners...");
+        shutdown_manager.shutdown_all().await;
+        info!("All runners stopped");
+    });
+
+    server.await?;
+
+    Ok(())
+}
+
+async fn run_stop(args: StopArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::process::Command;
+
+    info!("Stopping container '{}'...", args.name);
+
+    let output = Command::new("docker")
+        .args(["stop", "-t", &args.timeout.to_string(), &args.name])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        info!("Container '{}' stopped", args.name);
+        println!("{}", args.name);
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("Failed to stop container: {}", stderr);
+        process::exit(1);
+    }
+
+    Ok(())
+}
+
+async fn run_kill(args: KillArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::process::Command;
+
+    info!("Killing container '{}'...", args.name);
+
+    let output = Command::new("docker")
+        .args(["kill", &args.name])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        info!("Container '{}' killed", args.name);
+        println!("{}", args.name);
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("Failed to kill container: {}", stderr);
+        process::exit(1);
+    }
 
     Ok(())
 }

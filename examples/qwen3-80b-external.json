@@ -1,0 +1,26 @@
+{
+  "models": {
+    "qwen3-80b": {
+      "type": "external",
+      "interface": "openai-api",
+      "url": "http://localhost:8888",
+      "api-key": null
+    }
+  },
+  "architecture": [
+    {
+      "name": "chat",
+      "layer": 0,
+      "model": "qwen3-80b",
+      "adapter": "openai-api",
+      "output-to": ["output"],
+      "extra-options": {
+        "model_override": "RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4"
+      }
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}

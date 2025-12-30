@@ -67,6 +67,12 @@ pub enum Commands {
     /// Run a local pipeline server (legacy mode)
     #[command(name = "run")]
     Run(RunArgs),
+
+    /// Stop a running container (graceful shutdown)
+    Stop(StopArgs),
+
+    /// Kill a running container (force shutdown)
+    Kill(KillArgs),
 }
 
 /// Arguments for the serve command
@@ -284,6 +290,24 @@ pub struct RunArgs {
     /// Maximum concurrent requests per node
     #[arg(long, default_value = "100")]
     pub max_concurrent: usize,
+}
+
+/// Arguments for the stop command
+#[derive(Parser, Debug)]
+pub struct StopArgs {
+    /// Container name to stop
+    pub name: String,
+
+    /// Timeout in seconds before force killing (default: 10)
+    #[arg(short, long, default_value = "10")]
+    pub timeout: u64,
+}
+
+/// Arguments for the kill command
+#[derive(Parser, Debug)]
+pub struct KillArgs {
+    /// Container name to kill
+    pub name: String,
 }
 
 #[cfg(test)]

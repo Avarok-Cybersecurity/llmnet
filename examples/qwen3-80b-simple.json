@@ -1,0 +1,28 @@
+{
+  "models": {
+    "qwen3-80b": {
+      "runner": "docker",
+      "source": "RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4",
+      "docker": {
+        "image": "avarok/vllm-dgx-spark:v14",
+        "name": "vllm-nvfp4",
+        "gpus": "all",
+        "ipc": "host",
+        "volumes": ["~/.cache/huggingface:/root/.cache/huggingface"]
+      }
+    }
+  },
+  "architecture": [
+    {
+      "name": "chat",
+      "layer": 0,
+      "model": "qwen3-80b",
+      "adapter": "openai-api",
+      "output-to": ["output"]
+    },
+    {
+      "name": "output",
+      "adapter": "output"
+    }
+  ]
+}
