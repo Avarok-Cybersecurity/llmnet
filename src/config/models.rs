@@ -442,7 +442,11 @@ mod tests {
                 "gpus": "all",
                 "ipc": "host",
                 "volumes": ["${HOME}/.cache/huggingface:/root/.cache/huggingface"],
-                "extra_args": "--swap-space 32 --tool-call-parser hermes --enable-auto-tool-choice"
+                "extra_args": {
+                    "swap-space": 32,
+                    "tool-call-parser": "hermes",
+                    "enable-auto-tool-choice": true
+                }
             },
             "parameters": {
                 "tensor_parallel_size": 1,
@@ -462,7 +466,9 @@ mod tests {
         assert_eq!(docker.gpus, Some("all".to_string()));
         assert_eq!(docker.ipc, Some("host".to_string()));
         assert_eq!(docker.volumes.len(), 1);
-        assert!(docker.extra_args.as_ref().unwrap().contains("--swap-space 32"));
+        assert!(docker.extra_args.contains_key("swap-space"));
+        assert!(docker.extra_args.contains_key("tool-call-parser"));
+        assert!(docker.extra_args.contains_key("enable-auto-tool-choice"));
 
         assert!(config.parameters.contains_key("tensor_parallel_size"));
         assert!(config.parameters.contains_key("max_model_len"));

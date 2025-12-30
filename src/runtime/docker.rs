@@ -103,10 +103,12 @@ pub struct DockerConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
 
-    /// Extra arguments to pass to the container command
-    /// For vLLM: "--swap-space 32 --tool-call-parser hermes"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra_args: Option<String>,
+    /// Extra CLI arguments as a structured map
+    /// Converted to "--key value" or "--key" (for bools) format
+    /// Example: {"swap-space": 32, "tool-call-parser": "hermes", "enable-auto-tool-choice": true}
+    /// Becomes: "--swap-space 32 --tool-call-parser hermes --enable-auto-tool-choice"
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra_args: HashMap<String, Value>,
 
     /// Run container in detached mode (default: true)
     #[serde(default = "default_detached")]
@@ -174,6 +176,50 @@ impl DockerConfig {
 /// e.g., "tensor_parallel_size" -> "TENSOR_PARALLEL_SIZE"
 pub fn param_to_env_var(key: &str) -> String {
     key.to_uppercase()
+}
+
+/// Convert extra_args map to CLI argument string
+/// e.g., {"swap-space": 32, "tool-call-parser": "hermes", "enable-auto-tool-choice": true}
+/// becomes: "--swap-space 32 --tool-call-parser hermes --enable-auto-tool-choice"
+pub fn extra_args_to_string(args: &HashMap<String, Value>) -> String {
+    let mut parts = Vec::new();
+
+    for (key, value) in args {
+        let flag = format!("--{}", key);
+
+        match value {
+            Value::Bool(b) => {
+                if *b {
+                    parts.push(flag);
+                }
+                // false bools are omitted entirely
+            }
+            Value::Number(n) => {
+                parts.push(flag);
+                parts.push(n.to_string());
+            }
+            Value::String(s) => {
+                parts.push(flag);
+                parts.push(s.clone());
+            }
+            Value::Array(arr) => {
+                // For arrays, repeat the flag for each value
+                // e.g., {"stop": ["</s>", "<|end|>"]} -> "--stop </s> --stop <|end|>"
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        parts.push(flag.clone());
+                        parts.push(s.to_string());
+                    } else if let Some(n) = item.as_i64() {
+                        parts.push(flag.clone());
+                        parts.push(n.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    parts.join(" ")
 }
 
 /// Map common parameter names to their Docker env var equivalents
@@ -260,10 +306,11 @@ pub fn generate_run_args(
         args.push(format!("{}={}", env_name, env_value));
     }
 
-    // Extra vLLM args
-    if let Some(extra) = &config.extra_args {
+    // Extra vLLM args (converted from map to CLI string)
+    if !config.extra_args.is_empty() {
+        let extra_args_str = extra_args_to_string(&config.extra_args);
         args.push("-e".to_string());
-        args.push(format!("VLLM_EXTRA_ARGS={}", extra));
+        args.push(format!("VLLM_EXTRA_ARGS={}", extra_args_str));
     }
 
     // Additional env vars from config
@@ -429,14 +476,50 @@ mod tests {
     }
 
     #[test]
+    fn test_extra_args_to_string() {
+        let mut args = HashMap::new();
+        args.insert("swap-space".to_string(), Value::Number(32.into()));
+        args.insert("tool-call-parser".to_string(), Value::String("hermes".to_string()));
+        args.insert("enable-auto-tool-choice".to_string(), Value::Bool(true));
+        args.insert("disabled-feature".to_string(), Value::Bool(false));
+
+        let result = extra_args_to_string(&args);
+
+        // Check individual parts are present (order may vary due to HashMap)
+        assert!(result.contains("--swap-space 32"));
+        assert!(result.contains("--tool-call-parser hermes"));
+        assert!(result.contains("--enable-auto-tool-choice"));
+        assert!(!result.contains("--disabled-feature")); // false bools are omitted
+    }
+
+    #[test]
+    fn test_extra_args_with_array() {
+        let mut args = HashMap::new();
+        args.insert(
+            "stop".to_string(),
+            Value::Array(vec![
+                Value::String("</s>".to_string()),
+                Value::String("<|end|>".to_string()),
+            ]),
+        );
+
+        let result = extra_args_to_string(&args);
+        assert!(result.contains("--stop </s>"));
+        assert!(result.contains("--stop <|end|>"));
+    }
+
+    #[test]
     fn test_generate_run_args() {
+        let mut extra_args = HashMap::new();
+        extra_args.insert("swap-space".to_string(), Value::Number(32.into()));
+
         let config = DockerConfig {
             image: Some("dgx-vllm:cutlass-nvfp4".to_string()),
             network: "host".to_string(),
             gpus: Some("all".to_string()),
             ipc: Some("host".to_string()),
             volumes: vec!["${HOME}/.cache/huggingface:/root/.cache/huggingface".to_string()],
-            extra_args: Some("--swap-space 32".to_string()),
+            extra_args,
             detached: true,
             ..Default::default()
         };
