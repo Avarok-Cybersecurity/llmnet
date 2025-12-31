@@ -150,6 +150,10 @@ impl RunnerManager {
                 let (cn, e) = self.spawn_docker(name, config, host, port).await?;
                 (None, Some(cn), e)
             }
+            RunnerType::TensorRtLlm => {
+                let (c, e) = self.spawn_tensorrt_llm(name, config, host, port).await?;
+                (Some(c), None, e)
+            }
             RunnerType::External => {
                 return Err(RunnerError::ConfigError(
                     "External runners are not spawned locally".to_string(),
@@ -343,6 +347,42 @@ impl RunnerManager {
             .map_err(|e| RunnerError::SpawnError(format!("Failed to start llama-server: {}", e)))?;
 
         let endpoint = llamacpp::endpoint_url(host, port);
+        Ok((child, endpoint))
+    }
+
+    /// Spawn a TensorRT-LLM runner for NVIDIA Jetson/GPU devices
+    async fn spawn_tensorrt_llm(
+        &self,
+        _name: &str,
+        config: &ModelConfig,
+        host: &str,
+        port: u16,
+    ) -> Result<(Child, String), RunnerError> {
+        use crate::runtime::tensorrt_llm;
+
+        let source = config.source.as_deref().ok_or_else(|| {
+            RunnerError::ConfigError("TensorRT-LLM requires a model source".to_string())
+        })?;
+
+        // Check if we're on a Jetson device for optimal configuration
+        let is_jetson = tensorrt_llm::is_jetson_device();
+        if is_jetson {
+            info!("Detected Jetson device, using optimized TensorRT-LLM configuration");
+        }
+
+        let args = tensorrt_llm::generate_args(source, host, port, &config.parameters);
+
+        let child = Command::new("python")
+            .args(&args)
+            .envs(tensorrt_llm::generate_env_vars(config.api_key.as_deref()))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                RunnerError::SpawnError(format!("Failed to start TensorRT-LLM server: {}", e))
+            })?;
+
+        let endpoint = tensorrt_llm::endpoint_url(host, port);
         Ok((child, endpoint))
     }
 

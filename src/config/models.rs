@@ -20,6 +20,9 @@ pub enum RunnerType {
     LlamaCpp,
     /// Docker-based runner
     Docker,
+    /// TensorRT-LLM runner for NVIDIA Jetson and GPU edge devices
+    #[serde(rename = "tensorrt-llm")]
+    TensorRtLlm,
 }
 
 impl RunnerType {
@@ -31,6 +34,7 @@ impl RunnerType {
             RunnerType::Vllm => Some(8000),
             RunnerType::LlamaCpp => Some(8080),
             RunnerType::Docker => None,
+            RunnerType::TensorRtLlm => Some(8000),
         }
     }
 
@@ -38,7 +42,7 @@ impl RunnerType {
     pub fn is_local_runner(&self) -> bool {
         matches!(
             self,
-            RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp
+            RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp | RunnerType::TensorRtLlm
         )
     }
 }
@@ -151,6 +155,15 @@ impl ModelConfig {
         }
     }
 
+    /// Create a new TensorRT-LLM model configuration for NVIDIA Jetson/GPU devices
+    pub fn tensorrt_llm(source: impl Into<String>) -> Self {
+        Self {
+            runner: RunnerType::TensorRtLlm,
+            source: Some(source.into()),
+            ..Default::default()
+        }
+    }
+
     /// Add Docker configuration
     pub fn with_docker(mut self, docker_config: DockerConfig) -> Self {
         self.docker = Some(docker_config);
@@ -192,6 +205,7 @@ impl ModelConfig {
             RunnerType::Vllm => format!("http://{}:{}/v1", host, port),
             RunnerType::LlamaCpp => format!("http://{}:{}/v1", host, port),
             RunnerType::Docker => return None,
+            RunnerType::TensorRtLlm => format!("http://{}:{}/v1", host, port),
         })
     }
 
@@ -203,6 +217,7 @@ impl ModelConfig {
             RunnerType::Vllm => "vllm",
             RunnerType::LlamaCpp => "llama-cpp",
             RunnerType::Docker => "docker",
+            RunnerType::TensorRtLlm => "tensorrt-llm",
         }
     }
 }
@@ -287,6 +302,7 @@ impl ModelDefinition {
                     "ollama" => RunnerType::Ollama,
                     "vllm" => RunnerType::Vllm,
                     "llama-cpp" | "llamacpp" => RunnerType::LlamaCpp,
+                    "tensorrt-llm" | "tensorrt_llm" => RunnerType::TensorRtLlm,
                     _ => RunnerType::External,
                 };
                 ModelConfig {
@@ -434,6 +450,7 @@ mod tests {
         assert!(RunnerType::Vllm.is_local_runner());
         assert!(RunnerType::LlamaCpp.is_local_runner());
         assert!(!RunnerType::Docker.is_local_runner());
+        assert!(RunnerType::TensorRtLlm.is_local_runner());
     }
 
     #[test]
@@ -542,5 +559,57 @@ mod tests {
         assert_eq!(config.runner, RunnerType::Docker);
         assert_eq!(config.source, Some("my-model".to_string()));
         assert!(config.docker.is_some());
+    }
+
+    #[test]
+    fn test_parse_tensorrt_llm_model() {
+        let json = r#"{
+            "runner": "tensorrt-llm",
+            "source": "meta-llama/Llama-3.2-3B-Instruct",
+            "parameters": {
+                "max_batch_size": 8,
+                "max_input_len": 2048,
+                "quantization": "int4_awq"
+            }
+        }"#;
+
+        let config: ModelConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.runner, RunnerType::TensorRtLlm);
+        assert_eq!(
+            config.source,
+            Some("meta-llama/Llama-3.2-3B-Instruct".to_string())
+        );
+        assert!(config.parameters.contains_key("max_batch_size"));
+        assert!(config.parameters.contains_key("quantization"));
+    }
+
+    #[test]
+    fn test_tensorrt_llm_builder() {
+        let config = ModelConfig::tensorrt_llm("meta-llama/Llama-3.2-3B-Instruct")
+            .with_parameter("quantization".to_string(), Value::String("int4_awq".to_string()));
+
+        assert_eq!(config.runner, RunnerType::TensorRtLlm);
+        assert_eq!(
+            config.source,
+            Some("meta-llama/Llama-3.2-3B-Instruct".to_string())
+        );
+        assert_eq!(
+            config.parameters.get("quantization"),
+            Some(&Value::String("int4_awq".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_tensorrt_llm_effective_endpoint() {
+        let config = ModelConfig::tensorrt_llm("llama3");
+        assert_eq!(
+            config.effective_endpoint("localhost", None),
+            Some("http://localhost:8000/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_tensorrt_llm_default_port() {
+        assert_eq!(RunnerType::TensorRtLlm.default_port(), Some(8000));
     }
 }

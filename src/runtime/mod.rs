@@ -9,6 +9,7 @@ pub mod processor;
 pub mod request;
 pub mod router;
 pub mod runner;
+pub mod tensorrt_llm;
 pub mod vllm;
 
 pub use docker::DockerConfig;
