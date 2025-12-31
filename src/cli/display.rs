@@ -33,7 +33,11 @@ pub fn format_table(headers: &[&str], rows: Vec<Vec<String>>) -> String {
         if i > 0 {
             output.push_str("   ");
         }
-        output.push_str(&format!("{:width$}", header.to_uppercase(), width = widths[i]));
+        output.push_str(&format!(
+            "{:width$}",
+            header.to_uppercase(),
+            width = widths[i]
+        ));
     }
     output.push('\n');
 
@@ -142,7 +146,10 @@ pub fn format_pipeline_detail(pipeline: &Pipeline) -> String {
 
     if let Some(status) = &pipeline.status {
         output.push_str("\nStatus:\n");
-        output.push_str(&format!("  Ready Replicas:       {}\n", status.ready_replicas));
+        output.push_str(&format!(
+            "  Ready Replicas:       {}\n",
+            status.ready_replicas
+        ));
         output.push_str(&format!(
             "  Available Replicas:   {}\n",
             status.available_replicas
@@ -194,7 +201,10 @@ pub fn format_node_list(nodes: &[serde_json::Value]) -> String {
         .iter()
         .map(|n| {
             let name = n["metadata"]["name"].as_str().unwrap_or("?").to_string();
-            let status = n["status"]["phase"].as_str().unwrap_or("Unknown").to_string();
+            let status = n["status"]["phase"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string();
             let address = n["spec"]["address"].as_str().unwrap_or("?").to_string();
             let port = n["spec"]["port"].as_u64().unwrap_or(8080);
             let pipelines = n["status"]["pipelines"]
@@ -223,11 +233,36 @@ pub fn format_namespace_list(namespaces: &[serde_json::Value]) -> String {
     let headers = &["NAME"];
     let rows: Vec<Vec<String>> = namespaces
         .iter()
-        .map(|ns| {
-            vec![ns["metadata"]["name"]
-                .as_str()
-                .unwrap_or("?")
-                .to_string()]
+        .map(|ns| vec![ns["metadata"]["name"].as_str().unwrap_or("?").to_string()])
+        .collect();
+
+    format_table(headers, rows)
+}
+
+// ============================================================================
+// Worker resource display (containers, runners)
+// ============================================================================
+
+/// Format container list for display
+pub fn format_container_list(containers: &[String]) -> String {
+    let headers = &["CONTAINER"];
+    let rows: Vec<Vec<String>> = containers.iter().map(|c| vec![c.clone()]).collect();
+
+    format_table(headers, rows)
+}
+
+/// Format runner list for display
+pub fn format_runner_list(runners: &[serde_json::Value]) -> String {
+    let headers = &["NAME", "MODEL", "ENDPOINT", "STATUS"];
+    let rows: Vec<Vec<String>> = runners
+        .iter()
+        .map(|r| {
+            vec![
+                r["name"].as_str().unwrap_or("?").to_string(),
+                r["model"].as_str().unwrap_or("?").to_string(),
+                r["endpoint"].as_str().unwrap_or("?").to_string(),
+                r["status"].as_str().unwrap_or("running").to_string(),
+            ]
         })
         .collect();
 

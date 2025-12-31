@@ -23,8 +23,8 @@ impl AppState {
         let nodes = Arc::new(DashMap::new());
 
         // Build runtime nodes
-        let mut port_offset = 0u16;
-        for arch_node in &composition.architecture {
+        for (port_offset, arch_node) in composition.architecture.iter().enumerate() {
+            let port_offset = port_offset as u16;
             let model_config = arch_node
                 .model
                 .as_ref()
@@ -33,7 +33,6 @@ impl AppState {
 
             let runtime = RuntimeNode::from_architecture(arch_node, model_config, port_offset);
             nodes.insert(runtime.name.clone(), runtime);
-            port_offset += 1;
         }
 
         // Create pipeline processor

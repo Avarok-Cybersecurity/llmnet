@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
 use tracing::error;
@@ -232,7 +231,11 @@ pub async fn receive_assignment(
         );
 
         if needs_runner {
-            tracing::info!("Spawning {} runner for model '{}'...", config.type_name(), model_name);
+            tracing::info!(
+                "Spawning {} runner for model '{}'...",
+                config.type_name(),
+                model_name
+            );
 
             match manager.spawn_runner(model_name, &config).await {
                 Ok(endpoint) => {
@@ -245,7 +248,10 @@ pub async fn receive_assignment(
                         Json(AssignmentResponse {
                             success: false,
                             endpoint: None,
-                            error: Some(format!("Failed to spawn runner for '{}': {}", model_name, e)),
+                            error: Some(format!(
+                                "Failed to spawn runner for '{}': {}",
+                                model_name, e
+                            )),
                         }),
                     );
                 }
@@ -328,10 +334,7 @@ pub async fn chat_completions(
 
     // Add request ID to response headers
     let mut response_headers = HeaderMap::new();
-    response_headers.insert(
-        "x-request-id",
-        request_id.to_string().parse().unwrap(),
-    );
+    response_headers.insert("x-request-id", request_id.to_string().parse().unwrap());
 
     (response_headers, Json(response))
 }
@@ -482,7 +485,12 @@ mod tests {
         let app = create_test_app();
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -494,7 +502,12 @@ mod tests {
         let app = create_test_app();
 
         let response = app
-            .oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

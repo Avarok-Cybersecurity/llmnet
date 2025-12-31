@@ -110,22 +110,17 @@ pub struct NodeStatus {
 }
 
 /// Phase of a node
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NodePhase {
     /// Node is ready to accept pipelines
     Ready,
     /// Node is not ready (failed health checks)
     NotReady,
     /// Node status is unknown (missed heartbeats)
+    #[default]
     Unknown,
     /// Node is being terminated
     Terminating,
-}
-
-impl Default for NodePhase {
-    fn default() -> Self {
-        NodePhase::Unknown
-    }
 }
 
 /// A condition of a Node
@@ -428,10 +423,7 @@ impl Node {
 
     /// Get the number of pipelines running
     pub fn pipeline_count(&self) -> usize {
-        self.status
-            .as_ref()
-            .map(|s| s.pipelines.len())
-            .unwrap_or(0)
+        self.status.as_ref().map(|s| s.pipelines.len()).unwrap_or(0)
     }
 
     /// Check if node has capacity for more pipelines
@@ -582,7 +574,9 @@ mod tests {
 
     #[test]
     fn test_capacity_builder() {
-        let cap = NodeCapacity::with_gpu(4, 80).with_cpu(128).with_memory_gb(512);
+        let cap = NodeCapacity::with_gpu(4, 80)
+            .with_cpu(128)
+            .with_memory_gb(512);
 
         assert_eq!(cap.gpu, 4);
         assert_eq!(cap.gpu_memory, 80 * 1024 * 1024 * 1024);

@@ -190,8 +190,7 @@ pub fn evaluate_scaling(
 
     // Calculate desired replicas based on memory utilization
     let memory_desired = if config.target_memory_utilization > 0.0 {
-        ((current_replicas as f64 * aggregate.avg_memory_usage)
-            / config.target_memory_utilization)
+        ((current_replicas as f64 * aggregate.avg_memory_usage) / config.target_memory_utilization)
             .ceil() as u32
     } else {
         current_replicas
@@ -292,7 +291,9 @@ mod tests {
 
         let decision = evaluate_scaling(&config, 3, &metrics, &state);
         match decision {
-            ScalingDecision::ScaleUp { target_replicas, .. } => {
+            ScalingDecision::ScaleUp {
+                target_replicas, ..
+            } => {
                 assert!(target_replicas > 3);
                 assert!(target_replicas <= 5); // max_scale_up is 2
             }
@@ -308,7 +309,9 @@ mod tests {
 
         let decision = evaluate_scaling(&config, 5, &metrics, &state);
         match decision {
-            ScalingDecision::ScaleDown { target_replicas, .. } => {
+            ScalingDecision::ScaleDown {
+                target_replicas, ..
+            } => {
                 assert!(target_replicas < 5);
                 assert!(target_replicas >= 3); // max_scale_down is 2
             }
@@ -324,7 +327,9 @@ mod tests {
 
         let decision = evaluate_scaling(&config, 2, &metrics, &state);
         match decision {
-            ScalingDecision::ScaleDown { target_replicas, .. } => {
+            ScalingDecision::ScaleDown {
+                target_replicas, ..
+            } => {
                 assert!(target_replicas >= config.min_replicas);
             }
             ScalingDecision::NoChange => {} // Also acceptable if already at min
@@ -340,7 +345,9 @@ mod tests {
 
         let decision = evaluate_scaling(&config, 9, &metrics, &state);
         match decision {
-            ScalingDecision::ScaleUp { target_replicas, .. } => {
+            ScalingDecision::ScaleUp {
+                target_replicas, ..
+            } => {
                 assert!(target_replicas <= config.max_replicas);
             }
             ScalingDecision::NoChange => {} // Also acceptable if at max

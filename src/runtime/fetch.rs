@@ -218,18 +218,9 @@ mod tests {
 
     #[test]
     fn test_classify_remote_url() {
-        assert_eq!(
-            classify_path("http://example.com/file"),
-            PathType::Remote
-        );
-        assert_eq!(
-            classify_path("https://example.com/file"),
-            PathType::Remote
-        );
-        assert_eq!(
-            classify_path("HTTPS://EXAMPLE.COM/file"),
-            PathType::Remote
-        );
+        assert_eq!(classify_path("http://example.com/file"), PathType::Remote);
+        assert_eq!(classify_path("https://example.com/file"), PathType::Remote);
+        assert_eq!(classify_path("HTTPS://EXAMPLE.COM/file"), PathType::Remote);
     }
 
     #[test]
@@ -278,8 +269,8 @@ mod tests {
 
     #[test]
     fn test_huggingface_to_url() {
-        let url = huggingface_to_url("hf://TheBloke/Llama-2-7B-GGUF/llama-2-7b.Q4_K_M.gguf")
-            .unwrap();
+        let url =
+            huggingface_to_url("hf://TheBloke/Llama-2-7B-GGUF/llama-2-7b.Q4_K_M.gguf").unwrap();
         assert_eq!(
             url,
             "https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"

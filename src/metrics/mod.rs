@@ -139,7 +139,8 @@ impl MetricsCollector {
     pub fn record_request_end(&self, latency_ms: u64) {
         self.active_requests.fetch_sub(1, Ordering::SeqCst);
         self.request_count.fetch_add(1, Ordering::SeqCst);
-        self.total_latency_ms.fetch_add(latency_ms, Ordering::SeqCst);
+        self.total_latency_ms
+            .fetch_add(latency_ms, Ordering::SeqCst);
     }
 
     /// Get the current number of active requests

@@ -89,7 +89,10 @@ async fn test_worker_runner_endpoints() {
     // External runners return an error since they're not spawnable
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("not spawned locally"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("not spawned locally"));
 
     // Test 3: Health check still works
     let response = client

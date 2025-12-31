@@ -17,7 +17,6 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio_util::io::ReaderStream;
 use tracing::warn;
 
 use super::{
@@ -60,7 +59,10 @@ pub fn create_control_plane_router(state: ControlPlaneState) -> Router {
         // Cluster status
         .route("/v1/status", get(cluster_status))
         // Pipelines
-        .route("/v1/pipelines", get(list_all_pipelines).post(deploy_pipeline))
+        .route(
+            "/v1/pipelines",
+            get(list_all_pipelines).post(deploy_pipeline),
+        )
         .route(
             "/v1/namespaces/{namespace}/pipelines",
             get(list_pipelines_in_namespace),
@@ -168,7 +170,6 @@ async fn list_all_pipelines(State(state): State<ControlPlaneState>) -> impl Into
     Json(ResourceList::new("PipelineList", pipelines))
 }
 
-
 async fn list_pipelines_in_namespace(
     State(state): State<ControlPlaneState>,
     Path(namespace): Path<String>,
@@ -213,7 +214,10 @@ async fn scale_pipeline(
     Path((namespace, name)): Path<(String, String)>,
     Json(req): Json<ScaleRequest>,
 ) -> impl IntoResponse {
-    match state.controller.scale_pipeline(&namespace, &name, req.replicas) {
+    match state
+        .controller
+        .scale_pipeline(&namespace, &name, req.replicas)
+    {
         Ok(pipeline) => (StatusCode::OK, Json(DeployResponse::success(pipeline))),
         Err(e) => (
             StatusCode::NOT_FOUND,
@@ -296,10 +300,7 @@ async fn register_node(
     Json(node): Json<Node>,
 ) -> impl IntoResponse {
     match state.controller.register_node(node.clone()) {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(NodeResponse::success(Some(node))),
-        ),
+        Ok(_) => (StatusCode::CREATED, Json(NodeResponse::success(Some(node)))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(NodeResponse::error(e.to_string())),
@@ -383,17 +384,12 @@ async fn get_node_score(
 ) -> impl IntoResponse {
     match state.controller.get_node(&name) {
         Some(node) => {
-            let score = node
-                .status
-                .as_ref()
-                .and_then(|s| s.score.clone());
+            let score = node.status.as_ref().and_then(|s| s.score.clone());
             match score {
-                Some(s) => (StatusCode::OK, Json(NodeScoreResponse::with_score(name, s))).into_response(),
-                None => (
-                    StatusCode::OK,
-                    Json(NodeScoreResponse::no_score(name)),
-                )
-                    .into_response(),
+                Some(s) => {
+                    (StatusCode::OK, Json(NodeScoreResponse::with_score(name, s))).into_response()
+                }
+                None => (StatusCode::OK, Json(NodeScoreResponse::no_score(name))).into_response(),
             }
         }
         None => (
@@ -518,7 +514,7 @@ async fn stream_pipeline_logs(
     } else {
         // Find first model with docker config and a name
         let mut found: Option<String> = None;
-        for (_model_name, model_def) in &pipeline.spec.composition.models {
+        for model_def in pipeline.spec.composition.models.values() {
             let config = model_def.to_config();
             if let Some(docker) = &config.docker {
                 if let Some(name) = &docker.name {
@@ -532,7 +528,9 @@ async fn stream_pipeline_logs(
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Body::from("No docker container name found in composition. Specify ?container=NAME"),
+                    Body::from(
+                        "No docker container name found in composition. Specify ?container=NAME",
+                    ),
                 )
                     .into_response();
             }
@@ -612,16 +610,17 @@ async fn stream_pipeline_logs(
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 return (
-                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                     Body::from(body),
                 )
                     .into_response();
             }
 
             // Stream the response body
-            let stream = response.bytes_stream().map(|result| {
-                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-            });
+            let stream = response
+                .bytes_stream()
+                .map(|result| result.map_err(std::io::Error::other));
             let body = Body::from_stream(stream);
             (StatusCode::OK, body).into_response()
         }
@@ -655,7 +654,12 @@ mod tests {
         let app = create_test_app();
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

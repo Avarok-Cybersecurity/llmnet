@@ -10,9 +10,10 @@ use reqwest::Client;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use super::node::{NodeCapacity, NodeInfo, NodePhase, NodeStatus};
+use super::node::{NodeCapacity, NodeInfo, NodePhase, NodePipelineInfo, NodeStatus, ReplicaStatus};
 use super::HEARTBEAT_INTERVAL_SECS;
 use crate::metrics::SharedMetricsCollector;
+use crate::runtime::SharedRunnerManager;
 
 /// Configuration for the heartbeat client
 #[derive(Debug, Clone)]
@@ -63,6 +64,7 @@ pub struct HeartbeatClient {
     config: HeartbeatConfig,
     http_client: Client,
     metrics_collector: SharedMetricsCollector,
+    runner_manager: Option<SharedRunnerManager>,
 }
 
 impl HeartbeatClient {
@@ -77,7 +79,14 @@ impl HeartbeatClient {
             config,
             http_client,
             metrics_collector,
+            runner_manager: None,
         }
+    }
+
+    /// Set the runner manager for tracking running pipelines
+    pub fn with_runner_manager(mut self, manager: SharedRunnerManager) -> Self {
+        self.runner_manager = Some(manager);
+        self
     }
 
     /// Run the heartbeat loop
@@ -135,13 +144,41 @@ impl HeartbeatClient {
             collector.collect()
         };
 
+        // Collect running pipelines from runner manager
+        let pipelines = if let Some(ref rm) = self.runner_manager {
+            rm.list_running()
+                .into_iter()
+                .filter_map(|name| {
+                    // Get the endpoint to extract the port
+                    rm.get_endpoint(&name).map(|endpoint| {
+                        // Extract port from endpoint URL (e.g., "http://127.0.0.1:8080/v1")
+                        let port = endpoint
+                            .split(':')
+                            .nth(2)
+                            .and_then(|s| s.split('/').next())
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(8080);
+
+                        NodePipelineInfo {
+                            name: name.clone(),
+                            namespace: "default".to_string(),
+                            port,
+                            status: ReplicaStatus::Running,
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         // Build node status
         let status = NodeStatus {
             phase: NodePhase::Ready,
             conditions: vec![],
             capacity: self.config.capacity.clone(),
             allocatable: self.config.capacity.clone(),
-            pipelines: vec![], // TODO: Track running pipelines
+            pipelines,
             last_heartbeat: Utc::now(),
             node_info: NodeInfo::from_system(),
             metrics: Some(metrics),
@@ -192,8 +229,23 @@ pub fn spawn_heartbeat(
     config: HeartbeatConfig,
     metrics_collector: SharedMetricsCollector,
 ) -> watch::Sender<bool> {
+    spawn_heartbeat_with_runner(config, metrics_collector, None)
+}
+
+/// Spawn the heartbeat client with optional runner manager
+///
+/// Returns a shutdown sender that can be used to stop the heartbeat loop.
+pub fn spawn_heartbeat_with_runner(
+    config: HeartbeatConfig,
+    metrics_collector: SharedMetricsCollector,
+    runner_manager: Option<SharedRunnerManager>,
+) -> watch::Sender<bool> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let client = HeartbeatClient::new(config, metrics_collector);
+    let mut client = HeartbeatClient::new(config, metrics_collector);
+
+    if let Some(rm) = runner_manager {
+        client = client.with_runner_manager(rm);
+    }
 
     tokio::spawn(async move {
         client.run(shutdown_rx).await;

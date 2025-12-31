@@ -29,6 +29,7 @@ pub enum OrchestratorError {
 
 /// The main orchestrator that routes requests through the pipeline
 pub struct Orchestrator<C: OpenAiClientTrait> {
+    #[allow(dead_code)]
     composition: Arc<Composition>,
     nodes: HashMap<String, RuntimeNode>,
     router: Router<C>,
@@ -36,11 +37,7 @@ pub struct Orchestrator<C: OpenAiClientTrait> {
 }
 
 impl<C: OpenAiClientTrait> Orchestrator<C> {
-    pub fn new(
-        composition: Composition,
-        router_client: C,
-        router_model: String,
-    ) -> Self {
+    pub fn new(composition: Composition, router_client: C, router_model: String) -> Self {
         let nodes = build_runtime_nodes(&composition);
         Self {
             composition: Arc::new(composition),
@@ -82,13 +79,17 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
                         .route(&request.current_content, &metadata)
                         .await?;
 
-                    request.add_hop(router_node.name.clone(), current_layer, Some(selected.clone()));
+                    request.add_hop(
+                        router_node.name.clone(),
+                        current_layer,
+                        Some(selected.clone()),
+                    );
                     hop_count += 1;
 
                     // Find the selected node
                     self.nodes
                         .get(&selected)
-                        .ok_or_else(|| OrchestratorError::NodeNotFound(selected))?
+                        .ok_or(OrchestratorError::NodeNotFound(selected))?
                 } else {
                     router_node
                 }
@@ -103,7 +104,7 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
                             .map(|c| evaluate_condition(c, request.get_variables()))
                             .unwrap_or(true)
                     })
-                    .ok_or_else(|| OrchestratorError::EmptyLayer(current_layer))?;
+                    .ok_or(OrchestratorError::EmptyLayer(current_layer))?;
                 *node
             };
 
@@ -148,7 +149,7 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
                                 None
                             }
                         })
-                        .ok_or_else(|| OrchestratorError::NoOutput)?;
+                        .ok_or(OrchestratorError::NoOutput)?;
 
                     if target.is_output() {
                         request.add_hop(target.name.clone(), target.layer, None);
@@ -187,9 +188,9 @@ impl<C: OpenAiClientTrait> Orchestrator<C> {
 /// Pure function - no I/O.
 fn build_runtime_nodes(composition: &Composition) -> HashMap<String, RuntimeNode> {
     let mut nodes = HashMap::new();
-    let mut port_offset = 0u16;
 
-    for arch_node in &composition.architecture {
+    for (port_offset, arch_node) in composition.architecture.iter().enumerate() {
+        let port_offset = port_offset as u16;
         let model_config = arch_node
             .model
             .as_ref()
@@ -198,7 +199,6 @@ fn build_runtime_nodes(composition: &Composition) -> HashMap<String, RuntimeNode
 
         let runtime = RuntimeNode::from_architecture(arch_node, model_config, port_offset);
         nodes.insert(runtime.name.clone(), runtime);
-        port_offset += 1;
     }
 
     nodes

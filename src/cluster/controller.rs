@@ -10,12 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::RwLock;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use super::node::{Node, NodePhase, NodePipelineInfo, NodeStatus, ReplicaStatus};
 use super::pipeline::{Pipeline, PipelineStatus};
-use super::resources::{Namespace, LabelSelector};
+use super::resources::{LabelSelector, Namespace};
 use super::HEARTBEAT_INTERVAL_SECS;
 
 /// Errors that can occur in the cluster controller
@@ -355,7 +355,9 @@ impl ClusterController {
         self.pipelines
             .remove(&qualified_name)
             .map(|(_, p)| p)
-            .ok_or_else(|| ControllerError::PipelineNotFound(name.to_string(), namespace.to_string()))
+            .ok_or_else(|| {
+                ControllerError::PipelineNotFound(name.to_string(), namespace.to_string())
+            })
     }
 
     /// Get a pipeline by name
@@ -388,10 +390,9 @@ impl ClusterController {
     ) -> Result<Pipeline, ControllerError> {
         let qualified_name = format!("{}/{}", namespace, name);
 
-        let mut pipeline = self
-            .pipelines
-            .get_mut(&qualified_name)
-            .ok_or_else(|| ControllerError::PipelineNotFound(name.to_string(), namespace.to_string()))?;
+        let mut pipeline = self.pipelines.get_mut(&qualified_name).ok_or_else(|| {
+            ControllerError::PipelineNotFound(name.to_string(), namespace.to_string())
+        })?;
 
         pipeline.spec.replicas = replicas;
 
@@ -407,10 +408,9 @@ impl ClusterController {
     ) -> Result<(), ControllerError> {
         let qualified_name = format!("{}/{}", namespace, name);
 
-        let mut pipeline = self
-            .pipelines
-            .get_mut(&qualified_name)
-            .ok_or_else(|| ControllerError::PipelineNotFound(name.to_string(), namespace.to_string()))?;
+        let mut pipeline = self.pipelines.get_mut(&qualified_name).ok_or_else(|| {
+            ControllerError::PipelineNotFound(name.to_string(), namespace.to_string())
+        })?;
 
         pipeline.status = Some(status);
 
@@ -483,12 +483,9 @@ impl ClusterController {
             .sum();
 
         // Check if we have meaningful scores
-        let has_meaningful_scores = nodes.iter().any(|n| {
-            n.status
-                .as_ref()
-                .and_then(|s| s.score.as_ref())
-                .is_some()
-        });
+        let has_meaningful_scores = nodes
+            .iter()
+            .any(|n| n.status.as_ref().and_then(|s| s.score.as_ref()).is_some());
 
         if !has_meaningful_scores || total_score == 0.0 {
             // Fallback to round-robin if no scores
@@ -546,17 +543,9 @@ impl ClusterController {
     /// Get cluster statistics
     pub fn cluster_stats(&self) -> ClusterStats {
         let total_nodes = self.nodes.len();
-        let ready_nodes = self
-            .nodes
-            .iter()
-            .filter(|r| r.is_ready())
-            .count();
+        let ready_nodes = self.nodes.iter().filter(|r| r.is_ready()).count();
         let total_pipelines = self.pipelines.len();
-        let ready_pipelines = self
-            .pipelines
-            .iter()
-            .filter(|r| r.is_ready())
-            .count();
+        let ready_pipelines = self.pipelines.iter().filter(|r| r.is_ready()).count();
 
         ClusterStats {
             total_nodes,

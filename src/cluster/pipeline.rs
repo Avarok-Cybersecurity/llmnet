@@ -112,6 +112,19 @@ fn default_port() -> u16 {
     8080
 }
 
+/// Action to take when health check fails
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum HealthAction {
+    /// Just update status (mark replica as unhealthy) - passive tracking
+    #[default]
+    UpdateStatus,
+    /// Restart the container/process
+    Restart,
+    /// Reschedule to a different node
+    Reschedule,
+}
+
 /// Health check configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthConfig {
@@ -144,6 +157,11 @@ pub struct HealthConfig {
     #[serde(rename = "failureThreshold")]
     #[serde(default = "default_failure_threshold")]
     pub failure_threshold: u32,
+
+    /// Action to take when health check fails (default: UpdateStatus)
+    #[serde(rename = "failureAction")]
+    #[serde(default)]
+    pub failure_action: HealthAction,
 }
 
 impl Default for HealthConfig {
@@ -155,6 +173,7 @@ impl Default for HealthConfig {
             period_seconds: default_period(),
             timeout_seconds: default_timeout(),
             failure_threshold: default_failure_threshold(),
+            failure_action: HealthAction::default(),
         }
     }
 }

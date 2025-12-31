@@ -24,18 +24,14 @@ use super::secrets::SecretsManager;
 /// HTTP methods for REST functions
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
+#[derive(Default)]
 pub enum HttpMethod {
+    #[default]
     Get,
     Post,
     Put,
     Patch,
     Delete,
-}
-
-impl Default for HttpMethod {
-    fn default() -> Self {
-        Self::Get
-    }
 }
 
 /// Function type configuration
@@ -174,15 +170,14 @@ pub fn substitute_variables_in_map(
 }
 
 /// Substitute variables in a serde_json::Value recursively
-pub fn substitute_variables_in_value(
-    value: &Value,
-    variables: &HashMap<String, Value>,
-) -> Value {
+pub fn substitute_variables_in_value(value: &Value, variables: &HashMap<String, Value>) -> Value {
     match value {
         Value::String(s) => Value::String(substitute_variables(s, variables)),
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| substitute_variables_in_value(v, variables)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| substitute_variables_in_value(v, variables))
+                .collect(),
+        ),
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, v)| {
@@ -259,8 +254,15 @@ impl FunctionExecutor {
                 request,
                 timeout,
             } => {
-                self.execute_grpc(address, service, method, request.as_ref(), *timeout, variables)
-                    .await
+                self.execute_grpc(
+                    address,
+                    service,
+                    method,
+                    request.as_ref(),
+                    *timeout,
+                    variables,
+                )
+                .await
             }
         };
 
@@ -322,10 +324,7 @@ impl FunctionExecutor {
         }
 
         // Try to parse response as JSON
-        let body = response
-            .json::<Value>()
-            .await
-            .ok();
+        let body = response.json::<Value>().await.ok();
 
         Ok(body)
     }
@@ -413,12 +412,11 @@ impl FunctionExecutor {
             let text = serde_json::to_string(&substituted)
                 .map_err(|e| FunctionError::WebsocketError(e.to_string()))?;
 
-            ws_stream
-                .send(Message::Text(text.into()))
-                .await
-                .map_err(|e: tokio_tungstenite::tungstenite::Error| {
+            ws_stream.send(Message::Text(text.into())).await.map_err(
+                |e: tokio_tungstenite::tungstenite::Error| {
                     FunctionError::WebsocketError(e.to_string())
-                })?;
+                },
+            )?;
         }
 
         // Close connection
@@ -555,7 +553,12 @@ mod tests {
 
         let func: FunctionType = serde_json::from_str(json).unwrap();
         match func {
-            FunctionType::Shell { command, args, timeout, .. } => {
+            FunctionType::Shell {
+                command,
+                args,
+                timeout,
+                ..
+            } => {
                 assert_eq!(command, "python");
                 assert_eq!(args.len(), 3);
                 assert_eq!(timeout, 60);
@@ -599,7 +602,12 @@ mod tests {
 
         let func: FunctionType = serde_json::from_str(json).unwrap();
         match func {
-            FunctionType::Grpc { address, service, method, .. } => {
+            FunctionType::Grpc {
+                address,
+                service,
+                method,
+                ..
+            } => {
                 assert_eq!(address, "localhost:50051");
                 assert_eq!(service, "QuotaService");
                 assert_eq!(method, "CheckQuota");

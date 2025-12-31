@@ -158,10 +158,7 @@ pub fn validate_composition(composition: &Composition) -> Result<(), Composition
     }
 
     // Check for at least one router node (layer 0)
-    let has_router = composition
-        .architecture
-        .iter()
-        .any(|n| n.layer == Some(0));
+    let has_router = composition.architecture.iter().any(|n| n.layer == Some(0));
     if !has_router {
         return Err(CompositionError::NoRouterNode);
     }
@@ -198,6 +195,7 @@ pub fn validate_composition(composition: &Composition) -> Result<(), Composition
 impl Composition {
     /// Parse and validate from a JSONC string.
     /// Pure function - no I/O.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(content: &str) -> Result<Self, CompositionError> {
         let composition = parse_composition(content)?;
         validate_composition(&composition)?;
@@ -353,7 +351,10 @@ mod tests {
         }"#;
 
         let result = Composition::from_str(json);
-        assert!(matches!(result, Err(CompositionError::UndefinedModel(_, _))));
+        assert!(matches!(
+            result,
+            Err(CompositionError::UndefinedModel(_, _))
+        ));
     }
 
     #[test]

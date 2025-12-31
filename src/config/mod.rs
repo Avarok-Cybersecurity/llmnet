@@ -4,11 +4,15 @@ pub mod functions;
 pub mod models;
 pub mod secrets;
 
-pub use architecture::{ArchitectureNode, FailureAction, HookConfig, HookMode, NodeHooks, OutputTarget};
+pub use architecture::{
+    ArchitectureNode, FailureAction, HookConfig, HookMode, NodeHooks, OutputTarget,
+};
+pub use composition::{
+    parse_composition, strip_jsonc_comments, validate_composition, Composition, CompositionError,
+};
 pub use functions::{FunctionError, FunctionExecutor, FunctionResult, FunctionType, HttpMethod};
-pub use secrets::{SecretError, SecretSource, SecretsManager};
-pub use composition::{parse_composition, strip_jsonc_comments, validate_composition, Composition, CompositionError};
 pub use models::{DockerModel, ExternalModel, HuggingfaceModel, ModelDefinition};
+pub use secrets::{SecretError, SecretSource, SecretsManager};
 
 use std::path::Path;
 use thiserror::Error;

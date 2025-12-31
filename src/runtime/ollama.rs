@@ -301,9 +301,18 @@ SYSTEM You are a helpful assistant.
         let modelfile = parse_modelfile(content).unwrap();
         assert_eq!(modelfile.from, "tinyllama:1.1b");
         assert_eq!(modelfile.parameters.len(), 2);
-        assert_eq!(modelfile.parameters[0], ("temperature".to_string(), "0.7".to_string()));
-        assert_eq!(modelfile.parameters[1], ("num_ctx".to_string(), "2048".to_string()));
-        assert_eq!(modelfile.system, Some("You are a helpful assistant.".to_string()));
+        assert_eq!(
+            modelfile.parameters[0],
+            ("temperature".to_string(), "0.7".to_string())
+        );
+        assert_eq!(
+            modelfile.parameters[1],
+            ("num_ctx".to_string(), "2048".to_string())
+        );
+        assert_eq!(
+            modelfile.system,
+            Some("You are a helpful assistant.".to_string())
+        );
     }
 
     #[test]
@@ -378,14 +387,23 @@ ADAPTER /path/to/lora2.gguf
             Value::Number(serde_json::Number::from_f64(0.9).unwrap()),
         );
         params.insert("num_ctx".to_string(), Value::Number(4096.into()));
-        params.insert("system".to_string(), Value::String("New system prompt".to_string()));
+        params.insert(
+            "system".to_string(),
+            Value::String("New system prompt".to_string()),
+        );
 
         let merged = merge_parameters(base, &params);
 
         // temperature should be overwritten
-        assert!(merged.parameters.iter().any(|(k, v)| k == "temperature" && v == "0.9"));
+        assert!(merged
+            .parameters
+            .iter()
+            .any(|(k, v)| k == "temperature" && v == "0.9"));
         // num_ctx should be added
-        assert!(merged.parameters.iter().any(|(k, v)| k == "num_ctx" && v == "4096"));
+        assert!(merged
+            .parameters
+            .iter()
+            .any(|(k, v)| k == "num_ctx" && v == "4096"));
         // system should be set
         assert_eq!(merged.system, Some("New system prompt".to_string()));
     }
@@ -401,9 +419,7 @@ ADAPTER /path/to/lora2.gguf
     fn test_roundtrip() {
         let original = Modelfile {
             from: "llama2".to_string(),
-            parameters: vec![
-                ("temperature".to_string(), "0.7".to_string()),
-            ],
+            parameters: vec![("temperature".to_string(), "0.7".to_string())],
             system: Some("Be helpful".to_string()),
             template: None,
             adapters: vec!["/path/to/adapter.gguf".to_string()],
@@ -422,7 +438,13 @@ ADAPTER /path/to/lora2.gguf
 
     #[test]
     fn test_endpoint_url() {
-        assert_eq!(endpoint_url("localhost", 11434), "http://localhost:11434/v1");
-        assert_eq!(endpoint_url("192.168.1.100", 8080), "http://192.168.1.100:8080/v1");
+        assert_eq!(
+            endpoint_url("localhost", 11434),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(
+            endpoint_url("192.168.1.100", 8080),
+            "http://192.168.1.100:8080/v1"
+        );
     }
 }

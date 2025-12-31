@@ -104,7 +104,10 @@ impl OpenAiClientTrait for OpenAiClient {
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ClientError> {
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
 
         let mut req = self.client.post(&url).json(request);
 
@@ -112,7 +115,10 @@ impl OpenAiClientTrait for OpenAiClient {
             req = req.header("Authorization", format!("Bearer {}", key));
         }
 
-        let response = req.send().await.map_err(|e| ClientError::Http(e.to_string()))?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -257,10 +263,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client() {
-        let client = mock::MockOpenAiClient::new(vec![
-            "response1".to_string(),
-            "response2".to_string(),
-        ]);
+        let client =
+            mock::MockOpenAiClient::new(vec!["response1".to_string(), "response2".to_string()]);
 
         let req = ChatCompletionRequest {
             model: "test".to_string(),

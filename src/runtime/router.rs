@@ -39,7 +39,8 @@ impl From<&ArchitectureNode> for NodeMetadata {
 /// Build the routing prompt for the router model.
 /// Pure function - no I/O.
 pub fn build_routing_prompt(user_prompt: &str, available_nodes: &[NodeMetadata]) -> String {
-    let nodes_json = serde_json::to_string_pretty(available_nodes).unwrap_or_else(|_| "[]".to_string());
+    let nodes_json =
+        serde_json::to_string_pretty(available_nodes).unwrap_or_else(|_| "[]".to_string());
 
     format!(
         "Here is the user prompt: {}\n\n\
@@ -194,8 +195,7 @@ mod tests {
     #[test]
     fn test_extract_contained_in_response() {
         let nodes = sample_nodes();
-        let result =
-            extract_node_selection("I think company-2024-q3 is the best choice.", &nodes);
+        let result = extract_node_selection("I think company-2024-q3 is the best choice.", &nodes);
         assert_eq!(result.unwrap(), "company-2024-q3");
     }
 

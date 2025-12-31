@@ -5,19 +5,21 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use llmnet::cli::{
-    format_cluster_status, format_context_list, format_current_context, format_dry_run,
-    format_namespace_list, format_node_list, format_pipeline_detail, format_pipeline_list,
-    format_validation_result, Cli, Commands, ContextAction, ControlPlaneClient, DeleteResource,
-    GetResource, KillArgs, StopArgs,
+    check_server_status, format_cluster_status, format_container_list, format_context_list,
+    format_current_context, format_dry_run, format_namespace_list, format_node_list,
+    format_pipeline_detail, format_pipeline_list, format_runner_list, format_validation_result,
+    Cli, Commands, ContextAction, ControlPlaneClient, DeleteResource, GetResource, KillArgs,
+    ServerStatus, StopArgs, WorkerClient,
 };
-use llmnet::runtime::new_shared_manager;
 use llmnet::cluster::{
-    create_control_plane_router, spawn_heartbeat, spawn_orchestrator, ControlPlaneState,
-    HeartbeatConfig, Node, NodeCapacity, OrchestratorConfig, Pipeline, CONTROL_PLANE_PORT,
+    create_control_plane_router, spawn_heartbeat_with_runner, spawn_orchestrator,
+    ControlPlaneState, HeartbeatConfig, Node, NodeCapacity, OrchestratorConfig, Pipeline,
+    CONTROL_PLANE_PORT,
 };
-use llmnet::metrics::new_shared_collector;
 use llmnet::config::load_composition_file;
 use llmnet::context;
+use llmnet::metrics::new_shared_collector;
+use llmnet::runtime::new_shared_manager;
 use llmnet::server::{create_router, AppState};
 
 #[tokio::main]
@@ -77,9 +79,58 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
         }
     }
 
+    // Determine port and check if already running
+    let port = if args.control_plane {
+        args.port.unwrap_or(CONTROL_PLANE_PORT)
+    } else {
+        args.port.unwrap_or(8080)
+    };
+
+    // Use localhost for health check since 0.0.0.0 isn't reachable as a destination
+    let check_addr = format!("localhost:{}", port);
+
+    // Check if server is already running on this port
+    match check_server_status(&check_addr).await {
+        ServerStatus::NotRunning => {
+            // Good, proceed to start
+        }
+        ServerStatus::RunningHealthy => {
+            if args.force {
+                warn!(
+                    "Server already running and healthy on port {} - force flag set, stopping...",
+                    port
+                );
+                // Note: We can't easily stop the existing process from here.
+                // The user should stop it manually or use systemd/docker.
+                // For now, we'll try to bind anyway and let the OS reject it.
+                warn!("Cannot stop existing process programmatically. Please stop it manually.");
+                warn!("Hint: pkill -f 'llmnet serve' or systemctl stop llmnet");
+                process::exit(1);
+            } else {
+                println!("Server already running and healthy on port {}", port);
+                println!("Use --force to restart, or stop the existing server first.");
+                process::exit(1);
+            }
+        }
+        ServerStatus::RunningUnhealthy(reason) => {
+            if args.force {
+                warn!("Server running but unhealthy on port {}: {}", port, reason);
+                warn!("Force flag set, attempting to restart...");
+                warn!("Cannot stop existing process programmatically. Please stop it manually.");
+                warn!("Hint: pkill -f 'llmnet serve' or systemctl stop llmnet");
+                process::exit(1);
+            } else {
+                error!("Server running but UNHEALTHY on port {}: {}", port, reason);
+                println!("Server is running but unhealthy. You should restart it.");
+                println!("Use --force to restart, or stop the existing server first.");
+                // Exit 0 for unhealthy as per user request
+                process::exit(0);
+            }
+        }
+    }
+
     if args.control_plane {
         // Run as control plane server
-        let port = args.port.unwrap_or(CONTROL_PLANE_PORT);
         let addr = format!("{}:{}", args.bind_addr, port);
 
         info!("Starting LLMNet control plane on {}", addr);
@@ -87,10 +138,8 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
         let state = ControlPlaneState::new();
 
         // Spawn the orchestrator to schedule pipelines to workers
-        let _orchestrator_shutdown = spawn_orchestrator(
-            state.controller.clone(),
-            OrchestratorConfig::default(),
-        );
+        let _orchestrator_shutdown =
+            spawn_orchestrator(state.controller.clone(), OrchestratorConfig::default());
         info!("Orchestrator started - will schedule pipelines to workers");
 
         let app = create_control_plane_router(state);
@@ -109,7 +158,6 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
         axum::serve(listener, app).await?;
     } else {
         // Run as worker node
-        let port = args.port.unwrap_or(8080);
         let addr = format!("{}:{}", args.bind_addr, port);
         let node_name = args.node_name.unwrap_or_else(|| {
             hostname::get()
@@ -120,6 +168,9 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
 
         // Create metrics collector for heartbeats
         let metrics_collector = new_shared_collector();
+
+        // Create runner manager first (needed for heartbeat pipeline tracking)
+        let runner_manager = new_shared_manager();
 
         // Optional: register with control plane and start heartbeat
         let _heartbeat_shutdown = if let Some(ref cp_url) = args.control_plane_url {
@@ -146,29 +197,27 @@ async fn run_serve(args: llmnet::cli::ServeArgs) -> Result<(), Box<dyn std::erro
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
-                    warn!(
-                        "Failed to register node ({}): {}",
-                        status, body
-                    );
+                    warn!("Failed to register node ({}): {}", status, body);
                 }
                 Err(e) => {
                     warn!("Failed to connect to control plane: {}", e);
                 }
             }
 
-            // Start heartbeat client
+            // Start heartbeat client with runner manager for pipeline tracking
             let heartbeat_config = HeartbeatConfig::new(cp_url.clone(), node_name.clone())
                 .with_capacity(NodeCapacity::default());
 
-            Some(spawn_heartbeat(heartbeat_config, metrics_collector.clone()))
+            Some(spawn_heartbeat_with_runner(
+                heartbeat_config,
+                metrics_collector.clone(),
+                Some(runner_manager.clone()),
+            ))
         } else {
             None
         };
 
         info!("Starting LLMNet worker '{}' on {}", node_name, addr);
-
-        // Create runner manager for spawning model containers
-        let runner_manager = new_shared_manager();
 
         // For now, run an empty worker that just responds to health checks
         // and waits for pipeline assignments from the control plane
@@ -228,7 +277,10 @@ async fn run_deploy(
     };
 
     if args.dry_run {
-        println!("Dry-run mode: would deploy pipeline '{}'", pipeline.metadata.name);
+        println!(
+            "Dry-run mode: would deploy pipeline '{}'",
+            pipeline.metadata.name
+        );
         println!("{}", format_pipeline_detail(&pipeline));
         return Ok(());
     }
@@ -249,24 +301,56 @@ async fn run_get(
     config: &context::Config,
     args: llmnet::cli::GetArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client = ControlPlaneClient::from_context(config)?;
-
     match args.resource {
+        // Control plane resources
         GetResource::Pipelines {
             namespace,
             all_namespaces,
         } => {
-            let ns = if all_namespaces { None } else { namespace.as_deref() };
+            if config.is_worker() {
+                error!("'get pipelines' requires control plane context. Use 'llmnet context use local'");
+                std::process::exit(1);
+            }
+            let client = ControlPlaneClient::from_context(config)?;
+            let ns = if all_namespaces {
+                None
+            } else {
+                namespace.as_deref()
+            };
             let pipelines = client.list_pipelines(ns).await?;
             print!("{}", format_pipeline_list(&pipelines));
         }
         GetResource::Nodes => {
+            if config.is_worker() {
+                error!(
+                    "'get nodes' requires control plane context. Use 'llmnet context use local'"
+                );
+                std::process::exit(1);
+            }
+            let client = ControlPlaneClient::from_context(config)?;
             let nodes = client.list_nodes().await?;
             print!("{}", format_node_list(&nodes));
         }
         GetResource::Namespaces => {
+            if config.is_worker() {
+                error!("'get namespaces' requires control plane context. Use 'llmnet context use local'");
+                std::process::exit(1);
+            }
+            let client = ControlPlaneClient::from_context(config)?;
             let namespaces = client.list_namespaces().await?;
             print!("{}", format_namespace_list(&namespaces));
+        }
+
+        // Worker resources
+        GetResource::Containers => {
+            let client = WorkerClient::from_context(config)?;
+            let containers = client.list_containers().await?;
+            print!("{}", format_container_list(&containers));
+        }
+        GetResource::Runners => {
+            let client = WorkerClient::from_context(config)?;
+            let runners = client.list_runners().await?;
+            print!("{}", format_runner_list(&runners));
         }
     }
 
@@ -364,16 +448,26 @@ async fn run_logs(
     use futures::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let client = ControlPlaneClient::from_context(config)?;
-
-    info!(
-        "Streaming logs for pipeline '{}/{}' (follow={}, tail={})",
-        args.namespace, args.name, args.follow, args.tail
-    );
-
-    let response = client
-        .stream_logs(&args.namespace, &args.name, args.follow, args.tail)
-        .await?;
+    // In worker context, treat name as container name and stream logs directly
+    let response = if config.is_worker() {
+        info!(
+            "Streaming logs for container '{}' (follow={}, tail={})",
+            args.name, args.follow, args.tail
+        );
+        let client = WorkerClient::from_context(config)?;
+        client
+            .stream_logs(&args.name, args.follow, args.tail)
+            .await?
+    } else {
+        info!(
+            "Streaming logs for pipeline '{}/{}' (follow={}, tail={})",
+            args.namespace, args.name, args.follow, args.tail
+        );
+        let client = ControlPlaneClient::from_context(config)?;
+        client
+            .stream_logs(&args.namespace, &args.name, args.follow, args.tail)
+            .await?
+    };
 
     // Stream the response body to stdout
     let mut stream = response.bytes_stream();
@@ -396,9 +490,23 @@ async fn run_logs(
 }
 
 async fn run_status(config: &context::Config) -> Result<(), Box<dyn std::error::Error>> {
-    let client = ControlPlaneClient::from_context(config)?;
-    let status = client.status().await?;
-    print!("{}", format_cluster_status(&status));
+    if config.is_worker() {
+        // Worker mode - show local worker status
+        let client = WorkerClient::from_context(config)?;
+        let status = client.status().await?;
+        println!("Worker Status");
+        println!("=============\n");
+        println!("Runners:    {}", status["runners"].as_u64().unwrap_or(0));
+        println!("Containers: {}", status["containers"].as_u64().unwrap_or(0));
+        if let Some(pipelines) = status["pipelines"].as_array() {
+            println!("Pipelines:  {}", pipelines.len());
+        }
+    } else {
+        // Control plane mode - show cluster status
+        let client = ControlPlaneClient::from_context(config)?;
+        let status = client.status().await?;
+        print!("{}", format_cluster_status(&status));
+    }
     Ok(())
 }
 
@@ -463,7 +571,11 @@ async fn run_legacy(args: llmnet::cli::RunArgs) -> Result<(), Box<dyn std::error
     let mut endpoint_updates: Vec<(String, String)> = Vec::new();
 
     for (model_name, config) in models_needing_runners {
-        info!("Spawning {} runner for model '{}'...", config.type_name(), model_name);
+        info!(
+            "Spawning {} runner for model '{}'...",
+            config.type_name(),
+            model_name
+        );
 
         match runner_manager.spawn_runner(&model_name, &config).await {
             Ok(endpoint) => {

@@ -7,6 +7,9 @@ use thiserror::Error;
 /// Default control plane port for LLMNet clusters
 pub const DEFAULT_CONTROL_PLANE_PORT: u16 = 8181;
 
+/// Default worker node port
+pub const DEFAULT_WORKER_PORT: u16 = 8080;
+
 /// Default config file location: ~/.llmnet/config
 pub fn default_config_path() -> PathBuf {
     dirs::home_dir()
@@ -131,7 +134,9 @@ pub fn remove_context(config: &mut Config, name: &str) -> Option<Context> {
 
 /// Set the current context
 pub fn set_current_context(config: &mut Config, name: &str) -> Result<(), ContextError> {
-    if !config.contexts.contains_key(name) && name != "local" {
+    // Allow built-in contexts: "local" (control plane) and "worker" (worker node)
+    let is_builtin = name == "local" || name == "worker";
+    if !config.contexts.contains_key(name) && !is_builtin {
         return Err(ContextError::ContextNotFound(name.to_string()));
     }
     config.current_context = Some(name.to_string());
@@ -194,25 +199,35 @@ pub fn save_config_to(config: &Config, path: &PathBuf) -> Result<(), ContextErro
 }
 
 impl Config {
-    /// Get the URL for the current context (or local if "local")
+    /// Get the URL for the current context
+    ///
+    /// Built-in contexts:
+    /// - "local" (default): Control plane at bind_addr:8181
+    /// - "worker": Local worker node at localhost:8080
     pub fn current_url(&self) -> Result<String, ContextError> {
         let ctx_name = self.current_context.as_deref().unwrap_or("local");
-        if ctx_name == "local" {
-            Ok(format!(
+        match ctx_name {
+            "local" => Ok(format!(
                 "http://{}:{}",
                 self.local.bind_addr, self.local.port
-            ))
-        } else {
-            self.contexts
-                .get(ctx_name)
+            )),
+            "worker" => Ok(format!("http://localhost:{}", DEFAULT_WORKER_PORT)),
+            name => self
+                .contexts
+                .get(name)
                 .map(|c| c.url.clone())
-                .ok_or_else(|| ContextError::ContextNotFound(ctx_name.to_string()))
+                .ok_or_else(|| ContextError::ContextNotFound(name.to_string())),
         }
     }
 
-    /// Check if currently using local context
+    /// Check if currently using local context (control plane)
     pub fn is_local(&self) -> bool {
         self.current_context.as_deref().unwrap_or("local") == "local"
+    }
+
+    /// Check if currently using worker context
+    pub fn is_worker(&self) -> bool {
+        self.current_context.as_deref() == Some("worker")
     }
 }
 

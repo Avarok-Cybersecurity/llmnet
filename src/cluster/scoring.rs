@@ -185,7 +185,11 @@ mod tests {
         let score = calculate_node_score(&metrics, false, None);
 
         // Idle node should have score close to 100
-        assert!(score.score > 95.0, "Idle node score should be > 95, got {}", score.score);
+        assert!(
+            score.score > 95.0,
+            "Idle node score should be > 95, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -194,7 +198,11 @@ mod tests {
         let score = calculate_node_score(&metrics, false, None);
 
         // Busy node should have score close to 0
-        assert!(score.score < 20.0, "Busy node score should be < 20, got {}", score.score);
+        assert!(
+            score.score < 20.0,
+            "Busy node score should be < 20, got {}",
+            score.score
+        );
     }
 
     #[test]
@@ -267,7 +275,7 @@ mod tests {
     fn test_score_clamping() {
         // Test with values that could exceed bounds
         let metrics = NodeMetrics {
-            cpu_usage_percent: 150.0, // Invalid but should be handled
+            cpu_usage_percent: 150.0,    // Invalid but should be handled
             memory_usage_percent: -10.0, // Invalid but should be handled
             gpu_usage_percent: None,
             gpu_memory_usage_percent: None,

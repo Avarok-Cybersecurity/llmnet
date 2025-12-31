@@ -16,6 +16,7 @@ use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use super::controller::ClusterController;
+use super::node::ReplicaStatus;
 use super::pipeline::{PipelineCondition, PipelineStatus};
 use crate::config::Composition;
 
@@ -86,6 +87,7 @@ pub fn spawn_orchestrator(
             tokio::select! {
                 _ = ticker.tick() => {
                     reconcile_pipelines(&controller, &client).await;
+                    reconcile_health(&controller);
                 }
                 _ = shutdown_rx.changed() => {
                     info!("Orchestrator shutting down");
@@ -205,7 +207,10 @@ async fn schedule_pipeline(
             replicas: replica_count,
         };
 
-        debug!("Sending assignment to worker {} at {}", node_name, worker_url);
+        debug!(
+            "Sending assignment to worker {} at {}",
+            node_name, worker_url
+        );
 
         match client.post(&worker_url).json(&assignment).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -243,10 +248,7 @@ async fn schedule_pipeline(
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                warn!(
-                    "Worker {} returned error {}: {}",
-                    node_name, status, body
-                );
+                warn!("Worker {} returned error {}: {}", node_name, status, body);
             }
             Err(e) => {
                 warn!("Failed to contact worker {}: {}", node_name, e);
@@ -258,6 +260,80 @@ async fn schedule_pipeline(
         Err("No workers successfully accepted the assignment".into())
     } else {
         Ok(endpoints)
+    }
+}
+
+/// Reconcile pipeline health status based on node heartbeats
+///
+/// This function updates pipeline ready_replicas and available_replicas
+/// by counting replicas reported in node status.pipelines
+fn reconcile_health(controller: &ClusterController) {
+    let pipelines = controller.list_all_pipelines();
+    let nodes = controller.list_nodes();
+
+    for pipeline in pipelines {
+        let namespace = &pipeline.metadata.namespace;
+        let name = &pipeline.metadata.name;
+
+        // Count replicas across all nodes
+        let mut ready = 0u32;
+        let mut available = 0u32;
+
+        for node in &nodes {
+            if let Some(status) = &node.status {
+                for np in &status.pipelines {
+                    if &np.namespace == namespace && &np.name == name {
+                        ready += 1;
+                        if np.status == ReplicaStatus::Running {
+                            available += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only update if status differs from current
+        let current_status = pipeline.status.as_ref();
+        let needs_update = current_status
+            .map(|s| s.ready_replicas != ready || s.available_replicas != available)
+            .unwrap_or(true);
+
+        if needs_update {
+            let mut new_status = current_status
+                .cloned()
+                .unwrap_or_else(PipelineStatus::initial);
+            new_status.ready_replicas = ready;
+            new_status.available_replicas = available;
+            new_status.unavailable_replicas = pipeline.spec.replicas.saturating_sub(available);
+
+            // Add/update Available condition
+            if available >= pipeline.spec.replicas {
+                new_status
+                    .conditions
+                    .retain(|c| c.condition_type != "Available");
+                new_status.conditions.push(PipelineCondition::new(
+                    "Available",
+                    "True",
+                    "MinimumReplicasAvailable",
+                    format!(
+                        "{}/{} replicas available",
+                        available, pipeline.spec.replicas
+                    ),
+                ));
+            }
+
+            if let Err(e) = controller.update_pipeline_status(namespace, name, new_status) {
+                warn!(
+                    "Failed to update pipeline {}/{} health status: {}",
+                    namespace, name, e
+                );
+            } else {
+                debug!(
+                    "Pipeline {}/{} health: ready={}, available={}",
+                    namespace, name, ready, available
+                );
+            }
+        }
     }
 }
 

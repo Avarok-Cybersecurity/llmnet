@@ -106,6 +106,10 @@ pub struct ServeArgs {
     /// Control plane URL to register with (worker mode)
     #[arg(long)]
     pub control_plane_url: Option<String>,
+
+    /// Force restart even if already running and healthy
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Arguments for the deploy command
@@ -133,6 +137,9 @@ pub struct GetArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum GetResource {
+    // ============================================================================
+    // Control plane resources (require control plane context)
+    // ============================================================================
     /// List pipelines
     #[command(name = "pipelines", visible_alias = "pipeline", visible_alias = "pl")]
     Pipelines {
@@ -152,6 +159,17 @@ pub enum GetResource {
     /// List namespaces
     #[command(name = "namespaces", visible_alias = "namespace", visible_alias = "ns")]
     Namespaces,
+
+    // ============================================================================
+    // Worker resources (require worker context)
+    // ============================================================================
+    /// List local Docker containers (worker mode)
+    #[command(name = "containers", visible_alias = "container", visible_alias = "c")]
+    Containers,
+
+    /// List local model runners (worker mode)
+    #[command(name = "runners", visible_alias = "runner", visible_alias = "r")]
+    Runners,
 }
 
 /// Arguments for the delete command

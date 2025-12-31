@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::cluster::Pipeline;
 use crate::config::load_composition_file;
-use crate::context::{self, Config, Context, ContextError};
+use crate::context::{self, Config, Context, ContextError, DEFAULT_WORKER_PORT};
 
 /// Errors that can occur during command execution
 #[derive(Error, Debug)]
@@ -55,11 +55,17 @@ pub fn context_list(config: &Config) -> Vec<ContextInfo> {
         })
         .collect();
 
-    // Always include "local" context
+    // Always include built-in contexts
     contexts.push(ContextInfo {
         name: "local".to_string(),
         url: format!("http://{}:{}", config.local.bind_addr, config.local.port),
         is_current: current == Some("local") || current.is_none(),
+    });
+
+    contexts.push(ContextInfo {
+        name: "worker".to_string(),
+        url: format!("http://localhost:{}", DEFAULT_WORKER_PORT),
+        is_current: current == Some("worker"),
     });
 
     contexts.sort_by(|a, b| a.name.cmp(&b.name));
@@ -129,7 +135,7 @@ pub fn load_pipeline_manifest(path: &PathBuf) -> CommandResult<Pipeline> {
 }
 
 /// Create a pipeline from a composition file (legacy format)
-pub fn pipeline_from_composition(path: &PathBuf, name: &str) -> CommandResult<Pipeline> {
+pub fn pipeline_from_composition(path: &std::path::Path, name: &str) -> CommandResult<Pipeline> {
     let composition =
         load_composition_file(path).map_err(|e| CommandError::Config(e.to_string()))?;
     Ok(Pipeline::new(name, composition))
@@ -140,7 +146,7 @@ pub fn pipeline_from_composition(path: &PathBuf, name: &str) -> CommandResult<Pi
 // ============================================================================
 
 /// Validate a composition file
-pub fn validate_composition(path: &PathBuf) -> CommandResult<ValidationResult> {
+pub fn validate_composition(path: &std::path::Path) -> CommandResult<ValidationResult> {
     match load_composition_file(path) {
         Ok(comp) => Ok(ValidationResult {
             valid: true,
@@ -256,10 +262,7 @@ impl ControlPlaneClient {
     }
 
     /// List pipelines
-    pub async fn list_pipelines(
-        &self,
-        namespace: Option<&str>,
-    ) -> CommandResult<Vec<Pipeline>> {
+    pub async fn list_pipelines(&self, namespace: Option<&str>) -> CommandResult<Vec<Pipeline>> {
         let path = match namespace {
             Some(ns) => format!("/v1/namespaces/{}/pipelines", ns),
             None => "/v1/pipelines".to_string(),
@@ -427,6 +430,181 @@ impl ControlPlaneClient {
         }
 
         Ok(resp)
+    }
+}
+
+// ============================================================================
+// HTTP Client for Worker Nodes
+// ============================================================================
+
+/// Client for communicating with a local worker node
+pub struct WorkerClient {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+impl WorkerClient {
+    /// Create a new worker client
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            base_url: base_url.into(),
+        }
+    }
+
+    /// Create from current context (must be "worker" context)
+    pub fn from_context(config: &Config) -> CommandResult<Self> {
+        let url = config.current_url()?;
+        Ok(Self::new(url))
+    }
+
+    fn build_request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let url = format!("{}{}", self.base_url, path);
+        self.client.request(method, &url)
+    }
+
+    /// Get worker status
+    pub async fn status(&self) -> CommandResult<serde_json::Value> {
+        let resp = self
+            .build_request(reqwest::Method::GET, "/status")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(CommandError::Server(format!(
+                "Status check failed: {}",
+                resp.status()
+            )));
+        }
+
+        Ok(resp.json().await?)
+    }
+
+    /// List running containers
+    pub async fn list_containers(&self) -> CommandResult<Vec<String>> {
+        let resp = self
+            .build_request(reqwest::Method::GET, "/v1/containers")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(CommandError::Server(format!(
+                "Failed to list containers: {}",
+                resp.status()
+            )));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let containers = body["containers"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(containers)
+    }
+
+    /// List running model runners
+    pub async fn list_runners(&self) -> CommandResult<Vec<serde_json::Value>> {
+        let resp = self
+            .build_request(reqwest::Method::GET, "/v1/runners")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(CommandError::Server(format!(
+                "Failed to list runners: {}",
+                resp.status()
+            )));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let runners = body["runners"].as_array().cloned().unwrap_or_default();
+
+        Ok(runners)
+    }
+
+    /// Stream container logs
+    pub async fn stream_logs(
+        &self,
+        container: &str,
+        follow: bool,
+        tail: usize,
+    ) -> CommandResult<reqwest::Response> {
+        let path = format!(
+            "/v1/containers/{}/logs?follow={}&tail={}",
+            container, follow, tail
+        );
+
+        let resp = self
+            .build_request(reqwest::Method::GET, &path)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CommandError::Server(format!(
+                "Failed to stream logs ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(resp)
+    }
+}
+
+// ============================================================================
+// Server Health Check (for serve command pre-flight)
+// ============================================================================
+
+/// Result of checking if a server is already running
+#[derive(Debug, Clone)]
+pub enum ServerStatus {
+    /// No server running on this port
+    NotRunning,
+    /// Server running and healthy
+    RunningHealthy,
+    /// Server running but unhealthy
+    RunningUnhealthy(String),
+}
+
+/// Check if a server is already running on the given address
+pub async fn check_server_status(addr: &str) -> ServerStatus {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let health_url = format!("http://{}/health", addr);
+
+    match client.get(&health_url).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                ServerStatus::RunningHealthy
+            } else {
+                ServerStatus::RunningUnhealthy(format!("Health check returned: {}", resp.status()))
+            }
+        }
+        Err(e) => {
+            // Check if it's a connection refused error (not running)
+            // vs a timeout or other error (running but unhealthy)
+            let err_str = e.to_string();
+            if err_str.contains("Connection refused")
+                || err_str.contains("connection refused")
+                || err_str.contains("No connection could be made")
+            {
+                ServerStatus::NotRunning
+            } else if e.is_timeout() {
+                ServerStatus::RunningUnhealthy("Health check timed out".to_string())
+            } else {
+                // Could be DNS error or other - treat as not running
+                ServerStatus::NotRunning
+            }
+        }
     }
 }
 

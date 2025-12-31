@@ -36,7 +36,10 @@ impl RunnerType {
 
     /// Check if this runner needs to be spawned as a subprocess
     pub fn is_local_runner(&self) -> bool {
-        matches!(self, RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp)
+        matches!(
+            self,
+            RunnerType::Ollama | RunnerType::Vllm | RunnerType::LlamaCpp
+        )
     }
 }
 
@@ -211,6 +214,7 @@ impl ModelConfig {
 /// Model definition types (legacy format for backward compatibility)
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[allow(clippy::large_enum_variant)]
 pub enum ModelDefinition {
     External(ExternalModel),
     Docker(DockerModel),
@@ -398,13 +402,14 @@ mod tests {
     #[test]
     fn test_model_builders() {
         use serde_json::Number;
-        let ollama = ModelConfig::ollama("tinyllama:1.1b")
-            .with_parameter("temperature".to_string(), Value::Number(Number::from_f64(0.7).unwrap()));
+        let ollama = ModelConfig::ollama("tinyllama:1.1b").with_parameter(
+            "temperature".to_string(),
+            Value::Number(Number::from_f64(0.7).unwrap()),
+        );
         assert_eq!(ollama.runner, RunnerType::Ollama);
         assert!(ollama.parameters.contains_key("temperature"));
 
-        let external = ModelConfig::external("http://api.example.com")
-            .with_api_key("sk-test");
+        let external = ModelConfig::external("http://api.example.com").with_api_key("sk-test");
         assert_eq!(external.runner, RunnerType::External);
         assert_eq!(external.api_key, Some("sk-test".to_string()));
     }
@@ -458,7 +463,10 @@ mod tests {
 
         let config: ModelConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.runner, RunnerType::Docker);
-        assert_eq!(config.source, Some("RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4".to_string()));
+        assert_eq!(
+            config.source,
+            Some("RESMP-DEV/Qwen3-Next-80B-A3B-Instruct-NVFP4".to_string())
+        );
 
         let docker = config.docker.as_ref().unwrap();
         assert_eq!(docker.image, Some("dgx-vllm:cutlass-nvfp4".to_string()));
@@ -514,7 +522,10 @@ mod tests {
         let docker = config.docker.as_ref().unwrap();
 
         assert!(docker.image.is_none());
-        assert_eq!(docker.dockerfile, Some("./docker/Dockerfile.vllm".to_string()));
+        assert_eq!(
+            docker.dockerfile,
+            Some("./docker/Dockerfile.vllm".to_string())
+        );
         assert_eq!(docker.context, Some("./docker".to_string()));
     }
 

@@ -57,7 +57,10 @@ impl PipelineRequest {
         variables.insert(vars::TIMESTAMP.to_string(), now.timestamp().to_string());
         variables.insert(vars::REQUEST_ID.to_string(), request_id.to_string());
         variables.insert(vars::INPUT_LENGTH.to_string(), prompt.len().to_string());
-        variables.insert(vars::WORD_COUNT.to_string(), count_words(&prompt).to_string());
+        variables.insert(
+            vars::WORD_COUNT.to_string(),
+            count_words(&prompt).to_string(),
+        );
 
         Self {
             request_id,
@@ -80,7 +83,10 @@ impl PipelineRequest {
         variables.insert(vars::TIMESTAMP.to_string(), now.timestamp().to_string());
         variables.insert(vars::REQUEST_ID.to_string(), request_id.to_string());
         variables.insert(vars::INPUT_LENGTH.to_string(), prompt.len().to_string());
-        variables.insert(vars::WORD_COUNT.to_string(), count_words(&prompt).to_string());
+        variables.insert(
+            vars::WORD_COUNT.to_string(),
+            count_words(&prompt).to_string(),
+        );
 
         Self {
             request_id,
@@ -102,9 +108,12 @@ impl PipelineRequest {
         });
 
         // Update system variables after hop
-        self.variables.insert(vars::PREV_NODE.to_string(), node_name);
-        self.variables.insert(vars::PREV_LAYER.to_string(), layer.to_string());
-        self.variables.insert(vars::HOP_COUNT.to_string(), self.trace.len().to_string());
+        self.variables
+            .insert(vars::PREV_NODE.to_string(), node_name);
+        self.variables
+            .insert(vars::PREV_LAYER.to_string(), layer.to_string());
+        self.variables
+            .insert(vars::HOP_COUNT.to_string(), self.trace.len().to_string());
         if let Some(dec) = decision {
             self.variables.insert(vars::ROUTE_DECISION.to_string(), dec);
         }
@@ -112,17 +121,26 @@ impl PipelineRequest {
 
     /// Set the current layer being evaluated
     pub fn set_current_layer(&mut self, layer: u32) {
-        self.variables.insert(vars::CURRENT_LAYER.to_string(), layer.to_string());
+        self.variables
+            .insert(vars::CURRENT_LAYER.to_string(), layer.to_string());
     }
 
     /// Update the current content (after processing by a node)
     pub fn set_content(&mut self, content: String) {
         self.current_content = content.clone();
-        self.variables.insert(vars::CURRENT_INPUT.to_string(), content.clone());
-        self.variables.insert(vars::INPUT_LENGTH.to_string(), content.len().to_string());
-        self.variables.insert(vars::WORD_COUNT.to_string(), count_words(&content).to_string());
+        self.variables
+            .insert(vars::CURRENT_INPUT.to_string(), content.clone());
+        self.variables
+            .insert(vars::INPUT_LENGTH.to_string(), content.len().to_string());
+        self.variables.insert(
+            vars::WORD_COUNT.to_string(),
+            count_words(&content).to_string(),
+        );
         // Update timestamp on each content change
-        self.variables.insert(vars::TIMESTAMP.to_string(), chrono::Utc::now().timestamp().to_string());
+        self.variables.insert(
+            vars::TIMESTAMP.to_string(),
+            chrono::Utc::now().timestamp().to_string(),
+        );
     }
 
     /// Set a custom variable value
@@ -205,18 +223,30 @@ mod tests {
     #[test]
     fn test_initial_input_variable() {
         let req = PipelineRequest::new("Hello World".to_string());
-        assert_eq!(req.get_variable(vars::INITIAL_INPUT), Some(&"Hello World".to_string()));
+        assert_eq!(
+            req.get_variable(vars::INITIAL_INPUT),
+            Some(&"Hello World".to_string())
+        );
     }
 
     #[test]
     fn test_current_input_variable() {
         let mut req = PipelineRequest::new("Hello".to_string());
-        assert_eq!(req.get_variable(vars::CURRENT_INPUT), Some(&"Hello".to_string()));
+        assert_eq!(
+            req.get_variable(vars::CURRENT_INPUT),
+            Some(&"Hello".to_string())
+        );
 
         req.set_content("Modified content".to_string());
-        assert_eq!(req.get_variable(vars::CURRENT_INPUT), Some(&"Modified content".to_string()));
+        assert_eq!(
+            req.get_variable(vars::CURRENT_INPUT),
+            Some(&"Modified content".to_string())
+        );
         // INITIAL_INPUT should remain unchanged
-        assert_eq!(req.get_variable(vars::INITIAL_INPUT), Some(&"Hello".to_string()));
+        assert_eq!(
+            req.get_variable(vars::INITIAL_INPUT),
+            Some(&"Hello".to_string())
+        );
     }
 
     #[test]
@@ -225,10 +255,16 @@ mod tests {
         assert_eq!(req.get_variable(vars::PREV_NODE), None);
 
         req.add_hop("router".to_string(), 0, None);
-        assert_eq!(req.get_variable(vars::PREV_NODE), Some(&"router".to_string()));
+        assert_eq!(
+            req.get_variable(vars::PREV_NODE),
+            Some(&"router".to_string())
+        );
 
         req.add_hop("handler".to_string(), 1, None);
-        assert_eq!(req.get_variable(vars::PREV_NODE), Some(&"handler".to_string()));
+        assert_eq!(
+            req.get_variable(vars::PREV_NODE),
+            Some(&"handler".to_string())
+        );
     }
 
     #[test]
@@ -247,7 +283,10 @@ mod tests {
     fn test_current_layer_variable() {
         let mut req = PipelineRequest::new("Hello".to_string());
         req.set_current_layer(2);
-        assert_eq!(req.get_variable(vars::CURRENT_LAYER), Some(&"2".to_string()));
+        assert_eq!(
+            req.get_variable(vars::CURRENT_LAYER),
+            Some(&"2".to_string())
+        );
     }
 
     #[test]
@@ -286,7 +325,10 @@ mod tests {
         assert_eq!(req.get_variable(vars::ROUTE_DECISION), None);
 
         req.add_hop("router".to_string(), 0, Some("handler-a".to_string()));
-        assert_eq!(req.get_variable(vars::ROUTE_DECISION), Some(&"handler-a".to_string()));
+        assert_eq!(
+            req.get_variable(vars::ROUTE_DECISION),
+            Some(&"handler-a".to_string())
+        );
     }
 
     #[test]
@@ -295,7 +337,10 @@ mod tests {
         assert_eq!(req.get_variable(vars::INPUT_LENGTH), Some(&"5".to_string()));
 
         req.set_content("Hello World".to_string());
-        assert_eq!(req.get_variable(vars::INPUT_LENGTH), Some(&"11".to_string()));
+        assert_eq!(
+            req.get_variable(vars::INPUT_LENGTH),
+            Some(&"11".to_string())
+        );
     }
 
     #[test]

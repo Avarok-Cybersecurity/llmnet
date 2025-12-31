@@ -430,10 +430,7 @@ async fn test_post_hook_transform_mode() {
         .unwrap();
 
     // Transform mode should modify output
-    assert_eq!(
-        result,
-        Value::String("LLM output | VALIDATED".to_string())
-    );
+    assert_eq!(result, Value::String("LLM output | VALIDATED".to_string()));
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 }
 
@@ -657,10 +654,7 @@ async fn test_multiple_transform_hooks_chain() {
         .unwrap();
 
     // Hooks should chain: START -> START | STEP1 -> START | STEP1 | STEP2
-    assert_eq!(
-        result,
-        Value::String("START | STEP1 | STEP2".to_string())
-    );
+    assert_eq!(result, Value::String("START | STEP1 | STEP2".to_string()));
     assert_eq!(call_count1.load(Ordering::SeqCst), 1);
     assert_eq!(call_count2.load(Ordering::SeqCst), 1);
 }

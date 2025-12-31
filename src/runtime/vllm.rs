@@ -154,14 +154,11 @@ pub fn get_hf_token() -> Option<String> {
 /// Check if a model requires authentication (gated models)
 pub fn model_requires_auth(model: &str) -> bool {
     // Common gated model prefixes
-    let gated_prefixes = [
-        "meta-llama/",
-        "mistralai/Mistral",
-        "google/gemma",
-        "Qwen/",
-    ];
+    let gated_prefixes = ["meta-llama/", "mistralai/Mistral", "google/gemma", "Qwen/"];
 
-    gated_prefixes.iter().any(|prefix| model.starts_with(prefix))
+    gated_prefixes
+        .iter()
+        .any(|prefix| model.starts_with(prefix))
 }
 
 /// Generate environment variables for vLLM process
@@ -229,7 +226,10 @@ mod tests {
     #[test]
     fn test_endpoint_url() {
         assert_eq!(endpoint_url("localhost", 8000), "http://localhost:8000/v1");
-        assert_eq!(endpoint_url("192.168.1.100", 8080), "http://192.168.1.100:8080/v1");
+        assert_eq!(
+            endpoint_url("192.168.1.100", 8080),
+            "http://192.168.1.100:8080/v1"
+        );
     }
 
     #[test]
@@ -262,13 +262,19 @@ mod tests {
             env.get("HUGGING_FACE_HUB_TOKEN"),
             Some(&"hf_test_token".to_string())
         );
-        assert_eq!(env.get("TOKENIZERS_PARALLELISM"), Some(&"false".to_string()));
+        assert_eq!(
+            env.get("TOKENIZERS_PARALLELISM"),
+            Some(&"false".to_string())
+        );
     }
 
     #[test]
     fn test_generate_env_vars_without_token() {
         let env = generate_env_vars(None);
         assert!(env.get("HF_TOKEN").is_none());
-        assert_eq!(env.get("TOKENIZERS_PARALLELISM"), Some(&"false".to_string()));
+        assert_eq!(
+            env.get("TOKENIZERS_PARALLELISM"),
+            Some(&"false".to_string())
+        );
     }
 }

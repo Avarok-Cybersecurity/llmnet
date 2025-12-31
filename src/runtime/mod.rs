@@ -12,8 +12,8 @@ pub mod runner;
 pub mod vllm;
 
 pub use docker::DockerConfig;
-pub use hooks::{HookContext, HookError, HookExecutor};
 pub use fetch::{classify_path, fetch_file, PathType};
+pub use hooks::{HookContext, HookError, HookExecutor};
 pub use node::RuntimeNode;
 pub use ollama::Modelfile;
 pub use orchestrator::Orchestrator;

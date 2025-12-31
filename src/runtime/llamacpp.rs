@@ -169,7 +169,10 @@ mod tests {
     #[test]
     fn test_endpoint_url() {
         assert_eq!(endpoint_url("localhost", 8080), "http://localhost:8080/v1");
-        assert_eq!(endpoint_url("192.168.1.100", 9000), "http://192.168.1.100:9000/v1");
+        assert_eq!(
+            endpoint_url("192.168.1.100", 9000),
+            "http://192.168.1.100:9000/v1"
+        );
     }
 
     #[test]

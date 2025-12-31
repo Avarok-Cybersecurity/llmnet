@@ -55,8 +55,14 @@ impl HookContext {
         let mut vars = HashMap::new();
 
         vars.insert("NODE".to_string(), Value::String(self.node_name.clone()));
-        vars.insert("REQUEST_ID".to_string(), Value::String(self.request_id.clone()));
-        vars.insert("TIMESTAMP".to_string(), Value::String(self.timestamp.clone()));
+        vars.insert(
+            "REQUEST_ID".to_string(),
+            Value::String(self.request_id.clone()),
+        );
+        vars.insert(
+            "TIMESTAMP".to_string(),
+            Value::String(self.timestamp.clone()),
+        );
         vars.insert("INPUT".to_string(), input.clone());
 
         if let Some(prev) = &self.prev_node {
@@ -128,10 +134,7 @@ impl HookExecutor {
         for hook in hooks {
             // Check condition if present
             if let Some(condition) = &hook.condition {
-                let vars = context.build_variables(
-                    input_for_context.unwrap_or(&data),
-                    Some(&data),
-                );
+                let vars = context.build_variables(input_for_context.unwrap_or(&data), Some(&data));
                 if !self.evaluate_condition(condition, &vars) {
                     debug!(
                         "Skipping hook '{}' on node '{}': condition not met",
@@ -142,15 +145,13 @@ impl HookExecutor {
             }
 
             // Get function config
-            let func = self.functions.get(&hook.function).ok_or_else(|| {
-                HookError::FunctionNotFound(hook.function.clone())
-            })?;
+            let func = self
+                .functions
+                .get(&hook.function)
+                .ok_or_else(|| HookError::FunctionNotFound(hook.function.clone()))?;
 
             // Build variables
-            let vars = context.build_variables(
-                input_for_context.unwrap_or(&data),
-                Some(&data),
-            );
+            let vars = context.build_variables(input_for_context.unwrap_or(&data), Some(&data));
 
             match hook.mode {
                 HookMode::Observe => {
@@ -280,13 +281,10 @@ impl HookExecutor {
             let left = parts[0].trim();
             let right = parts[1].trim().trim_matches('"').trim_matches('\'');
 
-            if left.starts_with('$') {
-                let var_name = &left[1..];
+            if let Some(var_name) = left.strip_prefix('$') {
                 match variables.get(var_name) {
                     Some(Value::String(s)) => s == right,
-                    Some(Value::Bool(b)) => {
-                        (right == "true" && *b) || (right == "false" && !*b)
-                    }
+                    Some(Value::Bool(b)) => (right == "true" && *b) || (right == "false" && !*b),
                     Some(Value::Number(n)) => n.to_string() == right,
                     _ => false,
                 }
@@ -303,13 +301,10 @@ impl HookExecutor {
             let left = parts[0].trim();
             let right = parts[1].trim().trim_matches('"').trim_matches('\'');
 
-            if left.starts_with('$') {
-                let var_name = &left[1..];
+            if let Some(var_name) = left.strip_prefix('$') {
                 match variables.get(var_name) {
                     Some(Value::String(s)) => s != right,
-                    Some(Value::Bool(b)) => {
-                        !((right == "true" && *b) || (right == "false" && !*b))
-                    }
+                    Some(Value::Bool(b)) => !((right == "true" && *b) || (right == "false" && !*b)),
                     Some(Value::Number(n)) => n.to_string() != right,
                     _ => true, // Not found != anything is true
                 }
@@ -352,18 +347,34 @@ mod tests {
     fn test_hook_context_build_variables() {
         let mut ctx = create_test_context();
         ctx.prev_node = Some("prev-node".to_string());
-        ctx.custom_vars.insert("CUSTOM".to_string(), Value::String("value".to_string()));
+        ctx.custom_vars
+            .insert("CUSTOM".to_string(), Value::String("value".to_string()));
 
         let input = Value::String("input data".to_string());
         let output = Value::String("output data".to_string());
 
         let vars = ctx.build_variables(&input, Some(&output));
 
-        assert_eq!(vars.get("NODE"), Some(&Value::String("test-node".to_string())));
-        assert_eq!(vars.get("PREV_NODE"), Some(&Value::String("prev-node".to_string())));
-        assert_eq!(vars.get("INPUT"), Some(&Value::String("input data".to_string())));
-        assert_eq!(vars.get("OUTPUT"), Some(&Value::String("output data".to_string())));
-        assert_eq!(vars.get("CUSTOM"), Some(&Value::String("value".to_string())));
+        assert_eq!(
+            vars.get("NODE"),
+            Some(&Value::String("test-node".to_string()))
+        );
+        assert_eq!(
+            vars.get("PREV_NODE"),
+            Some(&Value::String("prev-node".to_string()))
+        );
+        assert_eq!(
+            vars.get("INPUT"),
+            Some(&Value::String("input data".to_string()))
+        );
+        assert_eq!(
+            vars.get("OUTPUT"),
+            Some(&Value::String("output data".to_string()))
+        );
+        assert_eq!(
+            vars.get("CUSTOM"),
+            Some(&Value::String("value".to_string()))
+        );
         assert!(vars.contains_key("REQUEST_ID"));
         assert!(vars.contains_key("TIMESTAMP"));
     }

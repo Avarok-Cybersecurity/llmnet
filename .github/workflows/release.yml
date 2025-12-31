@@ -1,0 +1,220 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  # Trigger on PR merge from version branches (v*)
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    # Skip if PR was closed without merge
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ===========================================
+          # Linux glibc (standard distributions)
+          # ===========================================
+
+          # Linux x86_64 (glibc) - most common servers
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: llmnet-linux-x86_64-gnu
+
+          # Linux aarch64 (glibc) - ARM servers, DGX, Graviton
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: llmnet-linux-aarch64-gnu
+            cross: true
+
+          # ===========================================
+          # Linux musl (static binaries, Alpine, containers)
+          # ===========================================
+
+          # Linux x86_64 musl - static binary, works everywhere
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact: llmnet-linux-x86_64-musl
+            cross: true
+
+          # Linux aarch64 musl - static ARM binary
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact: llmnet-linux-aarch64-musl
+            cross: true
+
+          # ===========================================
+          # macOS
+          # ===========================================
+
+          # macOS x86_64 (Intel Macs)
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact: llmnet-darwin-x86_64
+
+          # macOS aarch64 (Apple Silicon M1/M2/M3)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: llmnet-darwin-aarch64
+
+          # ===========================================
+          # Linux ARM 32-bit (Raspberry Pi, embedded)
+          # ===========================================
+
+          # ARMv7 (Raspberry Pi 2/3/4 32-bit mode)
+          - target: armv7-unknown-linux-gnueabihf
+            os: ubuntu-latest
+            artifact: llmnet-linux-armv7-gnueabihf
+            cross: true
+
+          # ARMv7 musl (static, for containers)
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            artifact: llmnet-linux-armv7-musleabihf
+            cross: true
+
+          # ===========================================
+          # BSD (servers, firewalls, NAS)
+          # ===========================================
+
+          # FreeBSD x86_64
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+            artifact: llmnet-freebsd-x86_64
+            cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for cross-compilation)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/${{ matrix.target }}/release/llmnet.exe dist/${{ matrix.artifact }}.exe
+          else
+            cp target/${{ matrix.target }}/release/llmnet dist/${{ matrix.artifact }}
+            chmod +x dist/${{ matrix.artifact }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}*
+          if-no-files-found: error
+
+  # Run tests on the primary platforms
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-features
+
+  # Create release on tag push, manual trigger, or merged version PR
+  release:
+    name: Create Release
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    # Release if:
+    # - Tag push starting with 'v'
+    # - Manual workflow dispatch
+    # - Merged PR from a branch starting with 'v' (version branch)
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'v'))
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                cp "$file" release/
+              fi
+            done
+          done
+          ls -la release/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.tag }}" ]]; then
+            # Manual trigger with specified tag
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Tag push
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.ref }}" == v* ]]; then
+            # Merged PR from version branch (e.g., v1.0.0)
+            echo "version=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          else
+            # Fallback to dev version
+            echo "version=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,7 +5,9 @@ use serde_json::Value;
 use thiserror::Error;
 use tracing::debug;
 
-use crate::client::{ChatCompletionRequest as ClientRequest, Message, OpenAiClient, OpenAiClientTrait};
+use crate::client::{
+    ChatCompletionRequest as ClientRequest, Message, OpenAiClient, OpenAiClientTrait,
+};
 use crate::config::{Composition, FunctionExecutor, ModelDefinition, OutputTarget, SecretsManager};
 use crate::runtime::hooks::{HookContext, HookError, HookExecutor};
 use crate::runtime::node::{evaluate_condition, RuntimeNode};
@@ -67,50 +69,51 @@ impl PipelineProcessor {
         let mut router_model_name = None;
 
         // Build nodes and clients
-        let mut port_offset = 0u16;
-        for arch_node in &composition.architecture {
+        for (port_offset, arch_node) in composition.architecture.iter().enumerate() {
+            let port_offset = port_offset as u16;
             let model_config = arch_node
                 .model
                 .as_ref()
                 .and_then(|m| composition.models.get(m))
                 .cloned();
 
-            let runtime = RuntimeNode::from_architecture(arch_node, model_config.clone(), port_offset);
+            let runtime =
+                RuntimeNode::from_architecture(arch_node, model_config.clone(), port_offset);
 
             // Create client for nodes with external models
             if let Some(ModelDefinition::External(ext)) = &model_config {
                 let model_name = runtime.model_override().unwrap_or_else(|| {
-                    arch_node.model.clone().unwrap_or_else(|| "default".to_string())
+                    arch_node
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string())
                 });
 
-                let client = OpenAiClient::new(
-                    ext.url.clone(),
-                    ext.api_key.clone(),
-                    model_name,
-                );
+                let client = OpenAiClient::new(ext.url.clone(), ext.api_key.clone(), model_name);
                 clients.insert(runtime.name.clone(), client);
             }
 
             // Track router node
             if arch_node.layer == Some(0) && arch_node.output_to.is_some() {
                 router_node_name = Some(runtime.name.clone());
-                router_model_name = runtime.model_override().or_else(|| {
-                    arch_node.model.clone()
-                });
+                router_model_name = runtime.model_override().or_else(|| arch_node.model.clone());
             }
 
             arch_nodes.insert(runtime.name.clone(), arch_node.clone());
             nodes.insert(runtime.name.clone(), runtime);
-            port_offset += 1;
         }
 
         let router_node_name = router_node_name.ok_or(ProcessorError::NoRouter)?;
-        let router_model_name = router_model_name.ok_or(ProcessorError::RouterModelNotConfigured)?;
+        let router_model_name =
+            router_model_name.ok_or(ProcessorError::RouterModelNotConfigured)?;
 
         // Initialize hook executor if functions are defined
         let hook_executor = if !composition.functions.is_empty() {
             let function_executor = Arc::new(FunctionExecutor::new(secrets));
-            Some(HookExecutor::new(function_executor, composition.functions.clone()))
+            Some(HookExecutor::new(
+                function_executor,
+                composition.functions.clone(),
+            ))
         } else {
             None
         };
@@ -158,7 +161,9 @@ impl PipelineProcessor {
             } else if next_targets.len() == 1 {
                 next_targets[0].clone()
             } else {
-                return Err(ProcessorError::ApiError("No next targets found".to_string()));
+                return Err(ProcessorError::ApiError(
+                    "No next targets found".to_string(),
+                ));
             };
 
             // Check if we've reached output
@@ -170,13 +175,19 @@ impl PipelineProcessor {
             }
 
             // Record the hop before calling LLM
-            let target_layer = self.nodes.get(&selected_target).map(|n| n.layer).unwrap_or(0);
-            request.add_hop(selected_target.clone(), target_layer, Some(selected_target.clone()));
+            let target_layer = self
+                .nodes
+                .get(&selected_target)
+                .map(|n| n.layer)
+                .unwrap_or(0);
+            request.add_hop(
+                selected_target.clone(),
+                target_layer,
+                Some(selected_target.clone()),
+            );
 
             // Execute pre-hooks for the target node
-            let input_content = self
-                .execute_pre_hooks(&selected_target, &request)
-                .await?;
+            let input_content = self.execute_pre_hooks(&selected_target, &request).await?;
 
             // Call the selected node's LLM
             let llm_output = self.call_node_llm(&selected_target, &input_content).await?;
@@ -209,7 +220,11 @@ impl PipelineProcessor {
             return Ok(request.current_content.clone());
         }
 
-        debug!("Executing {} pre-hooks for node '{}'", arch_node.hooks.pre.len(), node_name);
+        debug!(
+            "Executing {} pre-hooks for node '{}'",
+            arch_node.hooks.pre.len(),
+            node_name
+        );
 
         let context = self.build_hook_context(node_name, request);
         let input = Value::String(request.current_content.clone());
@@ -245,7 +260,11 @@ impl PipelineProcessor {
             return Ok(output);
         }
 
-        debug!("Executing {} post-hooks for node '{}'", arch_node.hooks.post.len(), node_name);
+        debug!(
+            "Executing {} post-hooks for node '{}'",
+            arch_node.hooks.post.len(),
+            node_name
+        );
 
         let context = self.build_hook_context(node_name, request);
         let input_value = Value::String(input.to_string());
@@ -273,7 +292,9 @@ impl PipelineProcessor {
 
         // Add custom variables from request (String -> Value conversion)
         for (key, value) in request.get_variables() {
-            context.custom_vars.insert(key.clone(), Value::String(value.clone()));
+            context
+                .custom_vars
+                .insert(key.clone(), Value::String(value.clone()));
         }
 
         context
@@ -376,7 +397,9 @@ impl PipelineProcessor {
             .collect();
 
         if metadata.is_empty() {
-            return Err(ProcessorError::ApiError("No valid targets for routing".to_string()));
+            return Err(ProcessorError::ApiError(
+                "No valid targets for routing".to_string(),
+            ));
         }
 
         let routing_prompt = build_routing_prompt(content, &metadata);
@@ -410,7 +433,11 @@ impl PipelineProcessor {
     }
 
     /// Call a node's LLM with content
-    async fn call_node_llm(&self, node_name: &str, content: &str) -> Result<String, ProcessorError> {
+    async fn call_node_llm(
+        &self,
+        node_name: &str,
+        content: &str,
+    ) -> Result<String, ProcessorError> {
         let node = self
             .nodes
             .get(node_name)
@@ -421,7 +448,9 @@ impl PipelineProcessor {
             .get(node_name)
             .ok_or_else(|| ProcessorError::HandlerNoModel(node_name.to_string()))?;
 
-        let model = node.model_override().unwrap_or_else(|| node_name.to_string());
+        let model = node
+            .model_override()
+            .unwrap_or_else(|| node_name.to_string());
 
         let request = ClientRequest {
             model,
@@ -526,7 +555,10 @@ mod tests {
         let result = PipelineProcessor::new(&comp);
 
         // Should fail because router has no model configured
-        assert!(matches!(result, Err(ProcessorError::RouterModelNotConfigured)));
+        assert!(matches!(
+            result,
+            Err(ProcessorError::RouterModelNotConfigured)
+        ));
     }
 
     #[test]
@@ -802,15 +834,20 @@ mod tests {
 
         // Test short input (5 words)
         let short_request = PipelineRequest::new("Hello world this is short".to_string());
-        let short_targets = processor.get_next_targets_filtered(router, &short_request).unwrap();
+        let short_targets = processor
+            .get_next_targets_filtered(router, &short_request)
+            .unwrap();
         assert_eq!(short_targets.len(), 1);
         assert_eq!(short_targets[0], "short-handler");
 
         // Test long input (15 words)
         let long_request = PipelineRequest::new(
-            "This is a much longer input that should be routed to the long handler node".to_string()
+            "This is a much longer input that should be routed to the long handler node"
+                .to_string(),
         );
-        let long_targets = processor.get_next_targets_filtered(router, &long_request).unwrap();
+        let long_targets = processor
+            .get_next_targets_filtered(router, &long_request)
+            .unwrap();
         assert_eq!(long_targets.len(), 1);
         assert_eq!(long_targets[0], "long-handler");
     }
@@ -870,14 +907,18 @@ mod tests {
 
         // Fresh request (HOP_COUNT = 0)
         let request = PipelineRequest::new("Hello".to_string());
-        let targets = processor.get_next_targets_filtered(router, &request).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(router, &request)
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], "first-pass");
 
         // Request with 1 hop
         let mut request_with_hop = PipelineRequest::new("Hello".to_string());
         request_with_hop.add_hop("router".to_string(), 0, Some("first-pass".to_string()));
-        let targets = processor.get_next_targets_filtered(router, &request_with_hop).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(router, &request_with_hop)
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], "second-pass");
     }
@@ -946,7 +987,9 @@ mod tests {
         // Request that came from handler-a
         let mut request_from_a = PipelineRequest::new("Hello".to_string());
         request_from_a.add_hop("handler-a".to_string(), 1, None);
-        let targets = processor.get_next_targets_filtered(handler_a, &request_from_a).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(handler_a, &request_from_a)
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], "refiner-for-a");
 
@@ -954,7 +997,9 @@ mod tests {
         let handler_b = processor.nodes.get("handler-b").unwrap();
         let mut request_from_b = PipelineRequest::new("Hello".to_string());
         request_from_b.add_hop("handler-b".to_string(), 1, None);
-        let targets = processor.get_next_targets_filtered(handler_b, &request_from_b).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(handler_b, &request_from_b)
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], "refiner-for-b");
     }
@@ -1006,7 +1051,9 @@ mod tests {
 
         // Neither condition can be satisfied, so we get all targets back
         let request = PipelineRequest::new("Hello world".to_string());
-        let targets = processor.get_next_targets_filtered(router, &request).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(router, &request)
+            .unwrap();
         assert_eq!(targets.len(), 2);
     }
 
@@ -1056,7 +1103,9 @@ mod tests {
 
         // Short input - only fallback passes (long-only condition fails)
         let short_request = PipelineRequest::new("Hello world".to_string());
-        let targets = processor.get_next_targets_filtered(router, &short_request).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(router, &short_request)
+            .unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], "fallback");
 
@@ -1065,7 +1114,9 @@ mod tests {
             "This is a very long input that has many many words to ensure it passes the twenty word threshold easily and then some more words"
                 .to_string()
         );
-        let targets = processor.get_next_targets_filtered(router, &long_request).unwrap();
+        let targets = processor
+            .get_next_targets_filtered(router, &long_request)
+            .unwrap();
         assert_eq!(targets.len(), 2);
     }
 }

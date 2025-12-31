@@ -65,11 +65,20 @@ pub mod scoring;
 
 pub use api::{create_control_plane_router, ControlPlaneState};
 pub use autoscaler::{AutoscalerState, ScalingDecision};
-pub use heartbeat::{spawn_heartbeat, HeartbeatClient, HeartbeatConfig};
-pub use orchestrator::{spawn_orchestrator, OrchestratorConfig, PipelineAssignment, AssignmentResponse};
 pub use controller::{ClusterController, ClusterStats, ControllerConfig};
-pub use node::{Node, NodeCapacity, NodeCondition, NodeMetrics, NodePhase, NodeScore, NodeStatus, ScoreBreakdown};
-pub use pipeline::{AutoscalingConfig, Pipeline, PipelineCondition, PipelineSpec, PipelineStatus, ScalingBehavior};
+pub use heartbeat::{
+    spawn_heartbeat, spawn_heartbeat_with_runner, HeartbeatClient, HeartbeatConfig,
+};
+pub use node::{
+    Node, NodeCapacity, NodeCondition, NodeMetrics, NodePhase, NodeScore, NodeStatus,
+    ScoreBreakdown,
+};
+pub use orchestrator::{
+    spawn_orchestrator, AssignmentResponse, OrchestratorConfig, PipelineAssignment,
+};
+pub use pipeline::{
+    AutoscalingConfig, Pipeline, PipelineCondition, PipelineSpec, PipelineStatus, ScalingBehavior,
+};
 pub use resources::*;
 pub use scoring::{calculate_node_score, ScoringWeights};
 

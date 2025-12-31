@@ -399,7 +399,11 @@ pub fn generate_stop_args(container_name: &str) -> Vec<String> {
 
 /// Generate Docker rm arguments
 pub fn generate_rm_args(container_name: &str) -> Vec<String> {
-    vec!["rm".to_string(), "-f".to_string(), container_name.to_string()]
+    vec![
+        "rm".to_string(),
+        "-f".to_string(),
+        container_name.to_string(),
+    ]
 }
 
 /// Expand environment variables and home directory in a string
@@ -408,7 +412,10 @@ pub fn expand_env_vars(input: &str) -> String {
     let mut result = input.to_string();
 
     // Handle ~ for home directory (must be at start of path or after : for volume mounts)
-    if let Some(home) = std::env::var("HOME").ok().or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().to_string())) {
+    if let Some(home) = std::env::var("HOME")
+        .ok()
+        .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().to_string()))
+    {
         // Handle ~ at the start of the string
         if result.starts_with("~/") {
             result = format!("{}{}", home, &result[1..]);
@@ -439,7 +446,12 @@ pub fn expand_env_vars(input: &str) -> String {
         if let Some(end) = result[start..].find('}') {
             let var_name = &result[start + 2..start + end];
             let var_value = std::env::var(var_name).unwrap_or_default();
-            result = format!("{}{}{}", &result[..start], var_value, &result[start + end + 1..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                var_value,
+                &result[start + end + 1..]
+            );
         } else {
             break;
         }
@@ -450,10 +462,7 @@ pub fn expand_env_vars(input: &str) -> String {
 
 /// Generate a unique container name
 pub fn generate_container_name(prefix: &str, model_name: &str) -> String {
-    let sanitized = model_name
-        .replace('/', "-")
-        .replace(':', "-")
-        .to_lowercase();
+    let sanitized = model_name.replace(['/', ':'], "-").to_lowercase();
     format!("{}-{}", prefix, sanitized)
 }
 
@@ -497,21 +506,30 @@ mod tests {
 
     #[test]
     fn test_param_to_env_var() {
-        assert_eq!(param_to_env_var("tensor_parallel_size"), "TENSOR_PARALLEL_SIZE");
+        assert_eq!(
+            param_to_env_var("tensor_parallel_size"),
+            "TENSOR_PARALLEL_SIZE"
+        );
         assert_eq!(param_to_env_var("max_model_len"), "MAX_MODEL_LEN");
     }
 
     #[test]
     fn test_map_param_name() {
         assert_eq!(map_param_name("gpu_memory_utilization"), "GPU_MEMORY_UTIL");
-        assert_eq!(map_param_name("tensor_parallel_size"), "tensor_parallel_size");
+        assert_eq!(
+            map_param_name("tensor_parallel_size"),
+            "tensor_parallel_size"
+        );
     }
 
     #[test]
     fn test_extra_args_to_string() {
         let mut args = HashMap::new();
         args.insert("swap-space".to_string(), Value::Number(32.into()));
-        args.insert("tool-call-parser".to_string(), Value::String("hermes".to_string()));
+        args.insert(
+            "tool-call-parser".to_string(),
+            Value::String("hermes".to_string()),
+        );
         args.insert("enable-auto-tool-choice".to_string(), Value::Bool(true));
         args.insert("disabled-feature".to_string(), Value::Bool(false));
 
@@ -576,17 +594,24 @@ mod tests {
         assert!(args.contains(&"all".to_string()));
         assert!(args.contains(&"--ipc".to_string()));
         assert!(args.contains(&"-e".to_string()));
-        assert!(args.iter().any(|a| a.contains("MODEL=RESMP-DEV/Qwen3-Next-80B")));
+        assert!(args
+            .iter()
+            .any(|a| a.contains("MODEL=RESMP-DEV/Qwen3-Next-80B")));
         assert!(args.iter().any(|a| a.contains("PORT=8888")));
         assert!(args.iter().any(|a| a.contains("TENSOR_PARALLEL_SIZE=1")));
         assert!(args.iter().any(|a| a.contains("MAX_MODEL_LEN=131072")));
-        assert!(args.iter().any(|a| a.contains("VLLM_EXTRA_ARGS=--swap-space 32")));
+        assert!(args
+            .iter()
+            .any(|a| a.contains("VLLM_EXTRA_ARGS=--swap-space 32")));
     }
 
     #[test]
     fn test_generate_build_args() {
         let args = generate_build_args("./Dockerfile", ".", "my-image:latest");
-        assert_eq!(args, vec!["build", "-f", "./Dockerfile", "-t", "my-image:latest", "."]);
+        assert_eq!(
+            args,
+            vec!["build", "-f", "./Dockerfile", "-t", "my-image:latest", "."]
+        );
     }
 
     #[test]
@@ -600,7 +625,10 @@ mod tests {
     #[test]
     fn test_expand_env_vars() {
         std::env::set_var("TEST_VAR", "test_value");
-        assert_eq!(expand_env_vars("prefix-${TEST_VAR}-suffix"), "prefix-test_value-suffix");
+        assert_eq!(
+            expand_env_vars("prefix-${TEST_VAR}-suffix"),
+            "prefix-test_value-suffix"
+        );
         std::env::remove_var("TEST_VAR");
     }
 

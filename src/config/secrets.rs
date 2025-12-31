@@ -29,9 +29,7 @@ pub enum SecretSource {
         variables: Vec<String>,
     },
     /// Load from system environment variable
-    Env {
-        variable: String,
-    },
+    Env { variable: String },
     /// Load from HashiCorp Vault
     Vault {
         address: String,
@@ -97,12 +95,11 @@ pub fn parse_env_content(content: &str) -> HashMap<String, String> {
             let mut value = line[pos + 1..].trim().to_string();
 
             // Remove surrounding quotes if present
-            if (value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\''))
+            if ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+                && value.len() >= 2
             {
-                if value.len() >= 2 {
-                    value = value[1..value.len() - 1].to_string();
-                }
+                value = value[1..value.len() - 1].to_string();
             }
 
             if !key.is_empty() {
@@ -162,8 +159,12 @@ pub fn substitute_secrets(template: &str, secrets: &HashMap<String, String>) -> 
         .replace_all(template, |caps: &regex::Captures<'_>| {
             let key = format!(
                 "{}.{}",
-                caps.get(1).map(|m: regex::Match<'_>| m.as_str()).unwrap_or(""),
-                caps.get(2).map(|m: regex::Match<'_>| m.as_str()).unwrap_or("")
+                caps.get(1)
+                    .map(|m: regex::Match<'_>| m.as_str())
+                    .unwrap_or(""),
+                caps.get(2)
+                    .map(|m: regex::Match<'_>| m.as_str())
+                    .unwrap_or("")
             );
             secrets.get(&key).cloned().unwrap_or_default()
         })
@@ -176,28 +177,22 @@ pub fn substitute_secrets_in_value(
     secrets: &HashMap<String, String>,
 ) -> serde_json::Value {
     match value {
-        serde_json::Value::String(s) => {
-            serde_json::Value::String(substitute_secrets(s, secrets))
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(
-                arr.iter()
-                    .map(|v| substitute_secrets_in_value(v, secrets))
-                    .collect(),
-            )
-        }
-        serde_json::Value::Object(map) => {
-            serde_json::Value::Object(
-                map.iter()
-                    .map(|(k, v)| {
-                        (
-                            substitute_secrets(k, secrets),
-                            substitute_secrets_in_value(v, secrets),
-                        )
-                    })
-                    .collect(),
-            )
-        }
+        serde_json::Value::String(s) => serde_json::Value::String(substitute_secrets(s, secrets)),
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.iter()
+                .map(|v| substitute_secrets_in_value(v, secrets))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    (
+                        substitute_secrets(k, secrets),
+                        substitute_secrets_in_value(v, secrets),
+                    )
+                })
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -276,11 +271,10 @@ impl SecretsManager {
 
     /// Load from system environment variable
     fn load_env_var(&self, name: &str, variable: &str) -> Result<(), SecretError> {
-        let value =
-            std::env::var(variable).map_err(|_| SecretError::EnvVarNotFound(variable.to_string()))?;
+        let value = std::env::var(variable)
+            .map_err(|_| SecretError::EnvVarNotFound(variable.to_string()))?;
 
-        self.secrets
-            .insert(format!("{}.{}", name, variable), value);
+        self.secrets.insert(format!("{}.{}", name, variable), value);
         Ok(())
     }
 
@@ -325,7 +319,9 @@ impl SecretsManager {
             .get("data")
             .and_then(|d| d.get("data"))
             .and_then(|d| d.as_object())
-            .ok_or_else(|| SecretError::VaultError("Invalid Vault response structure".to_string()))?;
+            .ok_or_else(|| {
+                SecretError::VaultError("Invalid Vault response structure".to_string())
+            })?;
 
         let mut parsed = HashMap::new();
         for (key, value) in data {

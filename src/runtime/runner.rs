@@ -49,6 +49,9 @@ pub enum RunnerError {
 
     #[error("Process exited unexpectedly")]
     ProcessExited,
+
+    #[error("Health check failed for endpoint: {0}")]
+    HealthCheckFailed(String),
 }
 
 /// Information about a running model runner process
@@ -216,7 +219,9 @@ impl RunnerManager {
             .env("OLLAMA_HOST", format!("{}:{}", host, port))
             .output()
             .await
-            .map_err(|e| RunnerError::SpawnError(format!("Failed to create ollama model: {}", e)))?;
+            .map_err(|e| {
+                RunnerError::SpawnError(format!("Failed to create ollama model: {}", e))
+            })?;
 
         if !create_result.status.success() {
             let stderr = String::from_utf8_lossy(&create_result.stderr);
@@ -239,8 +244,8 @@ impl RunnerManager {
                 .map_err(|e| RunnerError::FetchError(e.to_string()))?;
 
             let content = std::fs::read_to_string(&path)?;
-            let mut modelfile =
-                parse_modelfile(&content).map_err(|e| RunnerError::ModelfileError(e.to_string()))?;
+            let mut modelfile = parse_modelfile(&content)
+                .map_err(|e| RunnerError::ModelfileError(e.to_string()))?;
 
             // Merge user parameters
             modelfile = merge_parameters(modelfile, &config.parameters);
@@ -291,9 +296,7 @@ impl RunnerManager {
         let env_vars = vllm::generate_env_vars(hf_token.as_deref());
 
         let mut cmd = Command::new("python");
-        cmd.args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        cmd.args(&args).stdout(Stdio::null()).stderr(Stdio::null());
 
         // Add environment variables
         for (key, value) in env_vars {
@@ -414,9 +417,10 @@ impl RunnerManager {
         name: &str,
         docker_config: &DockerConfig,
     ) -> Result<(), RunnerError> {
-        let dockerfile_ref = docker_config.dockerfile.as_ref().ok_or_else(|| {
-            RunnerError::ConfigError("Dockerfile path not specified".to_string())
-        })?;
+        let dockerfile_ref = docker_config
+            .dockerfile
+            .as_ref()
+            .ok_or_else(|| RunnerError::ConfigError("Dockerfile path not specified".to_string()))?;
 
         // Fetch Dockerfile (supports local or remote)
         let dockerfile_path = fetch_file(dockerfile_ref)
@@ -525,8 +529,11 @@ impl RunnerManager {
             }
         }
 
-        warn!("Runner at {} may not be ready, proceeding anyway", endpoint);
-        Ok(())
+        error!(
+            "Runner at {} failed health check after 30 attempts",
+            endpoint
+        );
+        Err(RunnerError::HealthCheckFailed(endpoint.to_string()))
     }
 
     /// Get the next available port starting from base
@@ -558,10 +565,7 @@ impl RunnerManager {
             // Handle Docker containers
             if let Some(container_name) = &process.container_name {
                 let stop_args = docker::generate_stop_args(container_name);
-                let _ = Command::new("docker")
-                    .args(&stop_args)
-                    .output()
-                    .await;
+                let _ = Command::new("docker").args(&stop_args).output().await;
 
                 // Also remove the container
                 let rm_args = docker::generate_rm_args(container_name);
@@ -655,10 +659,7 @@ impl RunnerManager {
             // Handle Docker containers
             if let Some(container_name) = &process.container_name {
                 let stop_args = docker::generate_stop_args(container_name);
-                let _ = Command::new("docker")
-                    .args(&stop_args)
-                    .output()
-                    .await;
+                let _ = Command::new("docker").args(&stop_args).output().await;
 
                 let rm_args = docker::generate_rm_args(container_name);
                 let _ = Command::new("docker").args(&rm_args).output().await;

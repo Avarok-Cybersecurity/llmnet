@@ -110,7 +110,10 @@ pub fn evaluate_condition(
     // Handle simple variable existence check: "$VarName"
     if condition.starts_with('$') && !condition.contains(' ') {
         let var_name = &condition[1..];
-        return variables.get(var_name).map(|v| !v.is_empty()).unwrap_or(false);
+        return variables
+            .get(var_name)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
     }
 
     // Handle equality: "$VarName == \"value\""
@@ -120,9 +123,11 @@ pub fn evaluate_condition(
             let var_part = parts[0].trim();
             let val_part = parts[1].trim().trim_matches('"');
 
-            if var_part.starts_with('$') {
-                let var_name = &var_part[1..];
-                return variables.get(var_name).map(|v| v == val_part).unwrap_or(false);
+            if let Some(var_name) = var_part.strip_prefix('$') {
+                return variables
+                    .get(var_name)
+                    .map(|v| v == val_part)
+                    .unwrap_or(false);
             }
         }
     }
@@ -134,9 +139,11 @@ pub fn evaluate_condition(
             let var_part = parts[0].trim();
             let val_part = parts[1].trim().trim_matches('"');
 
-            if var_part.starts_with('$') {
-                let var_name = &var_part[1..];
-                return variables.get(var_name).map(|v| v != val_part).unwrap_or(true);
+            if let Some(var_name) = var_part.strip_prefix('$') {
+                return variables
+                    .get(var_name)
+                    .map(|v| v != val_part)
+                    .unwrap_or(true);
             }
         }
     }
@@ -259,7 +266,10 @@ mod tests {
             extra_options: HashMap::new(),
             hooks: NodeHooks::default(),
         };
-        assert!(matches!(AdapterType::from_node(&node3), AdapterType::WebSocket { .. }));
+        assert!(matches!(
+            AdapterType::from_node(&node3),
+            AdapterType::WebSocket { .. }
+        ));
     }
 
     #[test]
