@@ -585,8 +585,10 @@ mod tests {
 
     #[test]
     fn test_tensorrt_llm_builder() {
-        let config = ModelConfig::tensorrt_llm("meta-llama/Llama-3.2-3B-Instruct")
-            .with_parameter("quantization".to_string(), Value::String("int4_awq".to_string()));
+        let config = ModelConfig::tensorrt_llm("meta-llama/Llama-3.2-3B-Instruct").with_parameter(
+            "quantization".to_string(),
+            Value::String("int4_awq".to_string()),
+        );
 
         assert_eq!(config.runner, RunnerType::TensorRtLlm);
         assert_eq!(

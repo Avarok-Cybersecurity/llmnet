@@ -238,7 +238,7 @@ pub struct DeviceModelLimits {
 pub fn get_device_limits(device: &str) -> Option<DeviceModelLimits> {
     match device.to_lowercase().as_str() {
         "jetson-orin-nano" | "orin-nano" => Some(DeviceModelLimits {
-            max_params_billions: 7.0,   // With INT4 quantization
+            max_params_billions: 7.0, // With INT4 quantization
             recommended_quantization: "int4_awq",
             max_context_length: 2048,
         }),
@@ -287,8 +287,7 @@ pub fn is_tensorrt_llm_installed() -> bool {
 /// Check if running on a Jetson device
 pub fn is_jetson_device() -> bool {
     // Check for Jetson-specific file
-    std::path::Path::new("/etc/nv_tegra_release").exists()
-        || std::env::var("JETSON_FAMILY").is_ok()
+    std::path::Path::new("/etc/nv_tegra_release").exists() || std::env::var("JETSON_FAMILY").is_ok()
 }
 
 /// Get Jetson device type from tegra release file
@@ -382,7 +381,10 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("max_batch_size".to_string(), Value::Number(4.into()));
         params.insert("max_input_len".to_string(), Value::Number(1024.into()));
-        params.insert("quantization".to_string(), Value::String("int4_awq".to_string()));
+        params.insert(
+            "quantization".to_string(),
+            Value::String("int4_awq".to_string()),
+        );
 
         let args = generate_args("model", "localhost", 8000, &params);
 
@@ -423,7 +425,10 @@ mod tests {
     #[test]
     fn test_jetson_nano_params() {
         let params = jetson_nano_params();
-        assert_eq!(params.get("quantization"), Some(&Value::String("int4_awq".to_string())));
+        assert_eq!(
+            params.get("quantization"),
+            Some(&Value::String("int4_awq".to_string()))
+        );
         // Should have reduced batch size
         assert_eq!(params.get("max_batch_size"), Some(&Value::Number(4.into())));
     }

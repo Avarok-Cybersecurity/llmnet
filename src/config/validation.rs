@@ -253,10 +253,7 @@ pub fn get_quantization(config: &ModelConfig) -> String {
 }
 
 /// Validate a model configuration against a device profile
-pub fn validate_model_for_device(
-    config: &ModelConfig,
-    device: &DeviceProfile,
-) -> ValidationResult {
+pub fn validate_model_for_device(config: &ModelConfig, device: &DeviceProfile) -> ValidationResult {
     let mut result = ValidationResult::new();
 
     // Check runner compatibility
@@ -264,17 +261,17 @@ pub fn validate_model_for_device(
         RunnerType::TensorRtLlm if !device.tensorrt_support => {
             result = result.error(
                 "RUNNER_UNSUPPORTED",
-                &format!(
-                    "TensorRT-LLM is not supported on {}",
-                    device.name
-                ),
+                &format!("TensorRT-LLM is not supported on {}", device.name),
                 Some("Use llama-cpp runner instead for CPU-based inference"),
             );
         }
         RunnerType::Vllm if !device.cuda_support => {
             result = result.error(
                 "RUNNER_UNSUPPORTED",
-                &format!("vLLM requires CUDA which is not available on {}", device.name),
+                &format!(
+                    "vLLM requires CUDA which is not available on {}",
+                    device.name
+                ),
                 Some("Use llama-cpp runner for CPU-based inference"),
             );
         }
@@ -545,8 +542,10 @@ mod tests {
 
     #[test]
     fn test_validate_model_fits() {
-        let config = ModelConfig::tensorrt_llm("meta-llama/Llama-3.2-3B")
-            .with_parameter("quantization".to_string(), Value::String("int4_awq".to_string()));
+        let config = ModelConfig::tensorrt_llm("meta-llama/Llama-3.2-3B").with_parameter(
+            "quantization".to_string(),
+            Value::String("int4_awq".to_string()),
+        );
         let device = &known_devices()["jetson-orin-nano"];
 
         let result = validate_model_for_device(&config, device);
