@@ -299,27 +299,136 @@ pub fn format_validation_result(result: &ValidationResult, path: &str) -> String
 pub fn format_cluster_status(status: &serde_json::Value) -> String {
     let mut output = String::new();
 
-    output.push_str("Cluster Status\n");
-    output.push_str("==============\n\n");
+    // Show the health summary table first if there are replicas
+    if let Some(health) = status.get("health") {
+        let total = health["total_replicas"].as_u64().unwrap_or(0);
+        let healthy = health["healthy_replicas"].as_u64().unwrap_or(0);
+        let unhealthy = health["unhealthy_replicas"].as_u64().unwrap_or(0);
+        let starting = health["starting_replicas"].as_u64().unwrap_or(0);
+
+        // Determine overall status
+        let cluster_status = if total == 0 {
+            "Empty"
+        } else if unhealthy > 0 {
+            "Degraded"
+        } else if starting > 0 {
+            "Starting"
+        } else if healthy == total {
+            "Healthy"
+        } else {
+            "Unknown"
+        };
+
+        // Header
+        output.push_str("\n╔══════════════════════════════════════════════════════════════════════════════════════════╗\n");
+        output.push_str("║                              CLUSTER HEALTH STATUS                                       ║\n");
+        output.push_str("╠══════════════════════════════════════════════════════════════════════════════════════════╣\n");
+        output.push_str(&format!(
+            "║  Status: {:<10}  │  Total: {:>3}  │  Healthy: {:>3}  │  Unhealthy: {:>3}  │  Starting: {:>3}  ║\n",
+            cluster_status, total, healthy, unhealthy, starting
+        ));
+        output.push_str("╠══════════════════════════════════════════════════════════════════════════════════════════╣\n");
+
+        // Replica list
+        if let Some(replicas) = health["replicas"].as_array() {
+            if replicas.is_empty() {
+                output.push_str("║  No replicas deployed                                                                    ║\n");
+            } else {
+                // Column headers
+                output.push_str(&format!(
+                    "║  {:<12} │ {:<20} │ {:<10} │ {:<8} │ {:<10} │ {:<8} │ {:<6} ║\n",
+                    "NODE", "PIPELINE", "STATUS", "UPTIME", "LAST CHECK", "LATENCY", "ERRORS"
+                ));
+                output.push_str("╟──────────────┼──────────────────────┼────────────┼──────────┼────────────┼──────────┼────────╢\n");
+
+                for replica in replicas {
+                    let node = replica["node_name"].as_str().unwrap_or("?");
+                    let ns = replica["namespace"].as_str().unwrap_or("default");
+                    let name = replica["pipeline_name"].as_str().unwrap_or("?");
+                    let status_val = replica["status"].as_str().unwrap_or("Unknown");
+
+                    let status_str = match status_val {
+                        "Running" => "✓ Running",
+                        "Unhealthy" => "✗ Unhealthy",
+                        "Starting" => "◐ Starting",
+                        "Failed" => "✗ Failed",
+                        "Terminating" => "◑ Stopping",
+                        _ => "? Unknown",
+                    };
+
+                    // Format pipeline name
+                    let pipeline_display = if ns == "default" {
+                        name.to_string()
+                    } else {
+                        format!("{}/{}", ns, name)
+                    };
+
+                    // Calculate uptime if ready_since is present
+                    let uptime = replica["ready_since"]
+                        .as_str()
+                        .map(|_| "up") // If ready_since exists, it's up
+                        .unwrap_or("-");
+
+                    // Last probe info
+                    let (last_check, latency) = if let Some(probe) = replica.get("last_probe") {
+                        let latency_ms = probe["latency_ms"].as_u64().unwrap_or(0);
+                        ("recent".to_string(), format!("{}ms", latency_ms))
+                    } else {
+                        ("-".to_string(), "-".to_string())
+                    };
+
+                    let errors = replica["consecutive_failures"].as_u64().unwrap_or(0);
+
+                    output.push_str(&format!(
+                        "║  {:<12} │ {:<20} │ {:<10} │ {:<8} │ {:<10} │ {:<8} │ {:>6} ║\n",
+                        truncate_str(node, 12),
+                        truncate_str(&pipeline_display, 20),
+                        status_str,
+                        uptime,
+                        last_check,
+                        latency,
+                        errors
+                    ));
+                }
+            }
+        } else {
+            output.push_str("║  No replicas deployed                                                                    ║\n");
+        }
+
+        output.push_str("╚══════════════════════════════════════════════════════════════════════════════════════════╝\n");
+    }
+
+    // Basic cluster stats
+    output.push_str("\nCluster Summary\n");
+    output.push_str("───────────────\n");
 
     if let Some(stats) = status.get("stats") {
         output.push_str(&format!(
-            "Nodes:     {}/{} ready\n",
+            "  Nodes:      {}/{} ready\n",
             stats["ready_nodes"].as_u64().unwrap_or(0),
             stats["total_nodes"].as_u64().unwrap_or(0)
         ));
         output.push_str(&format!(
-            "Pipelines: {}/{} ready\n",
+            "  Pipelines:  {}/{} ready\n",
             stats["ready_pipelines"].as_u64().unwrap_or(0),
             stats["total_pipelines"].as_u64().unwrap_or(0)
         ));
         output.push_str(&format!(
-            "Namespaces: {}\n",
+            "  Namespaces: {}\n",
             stats["namespaces"].as_u64().unwrap_or(0)
         ));
     }
 
     output
+}
+
+/// Truncate a string to max length with ellipsis
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max_len - 1])
+    }
 }
 
 // ============================================================================

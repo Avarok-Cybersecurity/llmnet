@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use super::health_checker::ReplicaHealthState;
 use super::node::{Node, NodePhase, NodePipelineInfo, NodeStatus, ReplicaStatus};
 use super::pipeline::{Pipeline, PipelineStatus};
 use super::resources::{LabelSelector, Namespace};
@@ -61,6 +62,9 @@ pub struct ClusterController {
     /// Namespaces indexed by name
     namespaces: Arc<DashMap<String, Namespace>>,
 
+    /// Health state for each replica, indexed by key (node:namespace:pipeline:port)
+    replica_health: Arc<DashMap<String, ReplicaHealthState>>,
+
     /// Controller configuration
     config: Arc<RwLock<ControllerConfig>>,
 }
@@ -95,6 +99,7 @@ impl ClusterController {
             nodes: Arc::new(DashMap::new()),
             pipelines: Arc::new(DashMap::new()),
             namespaces: Arc::new(DashMap::new()),
+            replica_health: Arc::new(DashMap::new()),
             config: Arc::new(RwLock::new(ControllerConfig::default())),
         };
 
@@ -554,6 +559,31 @@ impl ClusterController {
             ready_pipelines,
             namespaces: self.namespaces.len(),
         }
+    }
+
+    // =========================================================================
+    // Replica Health Management
+    // =========================================================================
+
+    /// Get health state for a specific replica
+    pub fn get_replica_health(&self, key: &str) -> Option<ReplicaHealthState> {
+        self.replica_health.get(key).map(|r| r.clone())
+    }
+
+    /// Update health state for a replica
+    pub fn update_replica_health(&self, key: String, state: ReplicaHealthState) {
+        self.replica_health.insert(key, state);
+    }
+
+    /// List all replica health states
+    pub fn list_replica_health(&self) -> Vec<ReplicaHealthState> {
+        self.replica_health.iter().map(|r| r.clone()).collect()
+    }
+
+    /// Remove health states for replicas that no longer exist
+    pub fn cleanup_stale_health_states(&self, active_keys: &std::collections::HashSet<String>) {
+        self.replica_health
+            .retain(|key, _| active_keys.contains(key));
     }
 }
 

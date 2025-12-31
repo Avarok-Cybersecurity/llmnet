@@ -56,6 +56,7 @@
 pub mod api;
 pub mod autoscaler;
 pub mod controller;
+pub mod health_checker;
 pub mod heartbeat;
 pub mod node;
 pub mod orchestrator;
@@ -66,6 +67,10 @@ pub mod scoring;
 pub use api::{create_control_plane_router, ControlPlaneState};
 pub use autoscaler::{AutoscalerState, ScalingDecision};
 pub use controller::{ClusterController, ClusterStats, ControllerConfig};
+pub use health_checker::{
+    check_cluster_health, get_cluster_health_summary, ClusterHealthSummary, HealthCheckerConfig,
+    HealthProbeResult, ReplicaHealthState,
+};
 pub use heartbeat::{
     spawn_heartbeat, spawn_heartbeat_with_runner, HeartbeatClient, HeartbeatConfig,
 };

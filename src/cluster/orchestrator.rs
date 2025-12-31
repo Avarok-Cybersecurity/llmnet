@@ -16,6 +16,7 @@ use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use super::controller::ClusterController;
+use super::health_checker::{check_cluster_health, HealthCheckerConfig};
 use super::node::ReplicaStatus;
 use super::pipeline::{PipelineCondition, PipelineStatus};
 use crate::config::Composition;
@@ -76,6 +77,7 @@ pub fn spawn_orchestrator(
             .build()
             .expect("Failed to create HTTP client");
 
+        let health_config = HealthCheckerConfig::default();
         let mut ticker = interval(Duration::from_secs(config.reconcile_interval_secs));
 
         info!(
@@ -88,6 +90,8 @@ pub fn spawn_orchestrator(
                 _ = ticker.tick() => {
                     reconcile_pipelines(&controller, &client).await;
                     reconcile_health(&controller);
+                    // Active health probing of all replicas
+                    check_cluster_health(&controller, &client, &health_config).await;
                 }
                 _ = shutdown_rx.changed() => {
                     info!("Orchestrator shutting down");
