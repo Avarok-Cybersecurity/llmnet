@@ -196,7 +196,7 @@ jobs:
 
           # Build request payload
           PAYLOAD=$(jq -n \
-            --arg model "openai/gpt-oss-120b:free" \
+            --arg model "openai/gpt-4o-mini" \
             --arg prompt "$PROMPT" \
             --arg last "$LAST_VERSION" \
             --arg new "$NEW_VERSION" \
