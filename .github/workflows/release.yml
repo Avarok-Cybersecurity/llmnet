@@ -2,102 +2,387 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
-      - master
-    tags:
-      - 'v*'
-  # Trigger on PR merge from version branches (v*)
-  pull_request:
-    types: [closed]
-    branches:
-      - main
-      - master
+    branches: [main, master]  # Triggers "main" build
+    tags: ['v-*']             # Changed from 'v*' to 'v-*' (hyphen required)
+
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag (e.g., v0.1.0)'
+      version:
+        description: 'Version string (e.g., 1.2.3, 1.0.0-beta.1)'
+        required: true
+        type: string
+      overwrite:
+        description: 'Overwrite existing release if it exists'
         required: false
+        default: false
+        type: boolean
+      title:
+        description: 'Release title (defaults to AI-generated or version)'
+        required: false
+        type: string
+      body:
+        description: 'Release body (leave empty for AI-generated)'
+        required: false
+        type: string
+      target_branch:
+        description: 'Branch to build from'
+        required: false
+        default: 'main'
+        type: string
+      skip_ai_notes:
+        description: 'Skip AI-generated release notes'
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ============================================================================
+  # Pre-compilation validation (disabled for now)
+  # ============================================================================
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    # Disabled for now - change to 'true' when ready to enable
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch || github.ref }}
+
+      - name: Trigger CI workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              ref: '${{ inputs.target_branch || github.ref }}'
+            });
+
+  # ============================================================================
+  # Check version and tag existence
+  # ============================================================================
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      tag_exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for tags
+          ref: ${{ inputs.target_branch || github.ref }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v-* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v-}"
+          elif [[ "${{ github.ref }}" == refs/heads/main || "${{ github.ref }}" == refs/heads/master ]]; then
+            VERSION="main"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v-$VERSION" >> $GITHUB_OUTPUT
+          echo "Determined version: $VERSION (tag: v-$VERSION)"
+
+      - name: Check if tag exists
+        id: check
+        run: |
+          if git rev-parse "v-${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v-${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag v-${{ steps.version.outputs.version }} does not exist"
+          fi
+
+      - name: Fail if exists and no overwrite
+        if: steps.check.outputs.exists == 'true' && inputs.overwrite != true && github.event_name == 'workflow_dispatch'
+        run: |
+          echo "::error::Tag v-${{ steps.version.outputs.version }} already exists. Use overwrite=true to replace."
+          exit 1
+
+  # ============================================================================
+  # Generate AI release notes
+  # ============================================================================
+  generate-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    needs: [check-version]
+    # Skip for 'main' builds and when skip_ai_notes is true
+    if: needs.check-version.outputs.version != 'main' && github.event.inputs.skip_ai_notes != 'true'
+    outputs:
+      title: ${{ steps.ai.outputs.title }}
+      body_file: ${{ steps.ai.outputs.body_file }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_branch || github.ref }}
+
+      - name: Get commits since last release
+        id: commits
+        run: |
+          # Find the latest v-* tag
+          LATEST_TAG=$(git describe --tags --match "v-*" --abbrev=0 2>/dev/null || echo "")
+
+          if [[ -n "$LATEST_TAG" ]]; then
+            echo "last_version=${LATEST_TAG#v-}" >> $GITHUB_OUTPUT
+            echo "Found latest tag: $LATEST_TAG"
+            # Get commits as JSON array
+            COMMITS=$(git log --pretty=format:'{"sha":"%h","message":"%s"}' ${LATEST_TAG}..HEAD | jq -s '.')
+          else
+            echo "last_version=initial" >> $GITHUB_OUTPUT
+            echo "No previous v-* tags found, using all commits"
+            COMMITS=$(git log --pretty=format:'{"sha":"%h","message":"%s"}' | jq -s '.')
+          fi
+
+          # Save commits to file (too large for env var)
+          echo "$COMMITS" > /tmp/commits.json
+          echo "Found $(echo "$COMMITS" | jq length) commits"
+
+      - name: Call OpenRouter API for release notes
+        id: ai
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_FREE }}
+        run: |
+          NEW_VERSION="${{ needs.check-version.outputs.version }}"
+          LAST_VERSION="${{ steps.commits.outputs.last_version }}"
+          COMMITS=$(cat /tmp/commits.json)
+
+          # Build the prompt
+          read -r -d '' PROMPT << 'PROMPT_EOF' || true
+          You are a professional technical writer creating release notes for an open-source project called "llmnet" - an LLM pipeline orchestration CLI tool.
+          Generate beautiful, polished, and comprehensive release notes.
+
+          REQUIREMENTS:
+          1. Title: "v-VERSION: Concise but Descriptive Summary" (max 60 chars for the summary part)
+
+          2. Body structure in markdown:
+             a) Overview paragraph: 2-3 sentences summarizing the release's significance
+             b) Table of Contents with emoji icons:
+                - 🚀 New Features
+                - 🐛 Bug Fixes
+                - ⚡ Performance Improvements
+                - 🔧 Maintenance & Refactoring
+                - 📚 Documentation
+                - 🔒 Security
+             c) Sections for each category (skip empty categories):
+                - Group related commits logically
+                - Format: "- **Brief description** (`SHA`) - Additional context if helpful"
+             d) Breaking Changes section (if any, with ⚠️ icon)
+             e) Upgrade Notes (if relevant)
+             f) Contributors section (if extractable from commits)
+
+          3. Writing style:
+             - Professional but approachable
+             - Focus on user impact, not implementation details
+             - Use active voice
+             - Add inferred commentary explaining WHY changes matter
+
+          Respond with ONLY valid JSON (no markdown code fences, no extra text):
+          {"title": "v-VERSION: Summary", "body": "markdown body here"}
+          PROMPT_EOF
+
+          # Build request payload
+          PAYLOAD=$(jq -n \
+            --arg model "openai/gpt-oss-120b:free" \
+            --arg prompt "$PROMPT" \
+            --arg last "$LAST_VERSION" \
+            --arg new "$NEW_VERSION" \
+            --argjson commits "$COMMITS" \
+            '{
+              model: $model,
+              messages: [{
+                role: "user",
+                content: ($prompt + "\n\nLast version: " + $last + "\nNew version: " + $new + "\nCommits:\n" + ($commits | tostring))
+              }],
+              temperature: 0.7,
+              max_tokens: 4000
+            }')
+
+          # Exponential backoff wrapper
+          call_api() {
+            local max_attempts=5
+            local attempt=1
+            local delay=2
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "API call attempt $attempt of $max_attempts..."
+
+              RESPONSE=$(curl -s -w "\n%{http_code}" \
+                -X POST "https://openrouter.ai/api/v1/chat/completions" \
+                -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+                -H "Content-Type: application/json" \
+                -H "HTTP-Referer: https://github.com/Avarok-Cybersecurity/llmnet" \
+                -H "X-Title: llmnet Release Notes Generator" \
+                -d "$PAYLOAD" 2>&1)
+
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+              BODY=$(echo "$RESPONSE" | sed '$d')
+
+              if [ "$HTTP_CODE" -eq 200 ]; then
+                echo "$BODY"
+                return 0
+              fi
+
+              echo "Attempt $attempt failed with HTTP $HTTP_CODE"
+              echo "Response: $BODY"
+              echo "Retrying in ${delay}s..."
+              sleep $delay
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+
+            echo "::error::OpenRouter API call failed after $max_attempts attempts"
+            return 1
+          }
+
+          RESULT=$(call_api)
+          API_STATUS=$?
+
+          if [ $API_STATUS -ne 0 ]; then
+            # Fallback to simple notes
+            echo "::warning::AI generation failed, using fallback"
+            echo "title=v-$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "Release v-$NEW_VERSION" > /tmp/release_body.md
+            echo "body_file=/tmp/release_body.md" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Parse the AI response
+          CONTENT=$(echo "$RESULT" | jq -r '.choices[0].message.content // empty')
+
+          if [[ -z "$CONTENT" ]]; then
+            echo "::warning::Empty AI response, using fallback"
+            echo "title=v-$NEW_VERSION" >> $GITHUB_OUTPUT
+            echo "Release v-$NEW_VERSION" > /tmp/release_body.md
+            echo "body_file=/tmp/release_body.md" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Try to parse as JSON - handle potential markdown code fences
+          CLEAN_CONTENT=$(echo "$CONTENT" | sed 's/^```json//g' | sed 's/^```//g' | sed 's/```$//g')
+
+          TITLE=$(echo "$CLEAN_CONTENT" | jq -r '.title // empty' 2>/dev/null)
+          BODY=$(echo "$CLEAN_CONTENT" | jq -r '.body // empty' 2>/dev/null)
+
+          if [[ -z "$TITLE" ]]; then
+            echo "::warning::Could not parse title from AI response, using fallback"
+            TITLE="v-$NEW_VERSION"
+          fi
+
+          if [[ -z "$BODY" ]]; then
+            echo "::warning::Could not parse body from AI response, using fallback"
+            BODY="Release v-$NEW_VERSION"
+          fi
+
+          # Output
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "$BODY" > /tmp/release_body.md
+          echo "body_file=/tmp/release_body.md" >> $GITHUB_OUTPUT
+
+      - name: Debug - Print generated notes
+        run: |
+          echo "============================================"
+          echo "=== AI-Generated Release Notes Preview ==="
+          echo "============================================"
+          echo ""
+          echo "Title: ${{ steps.ai.outputs.title }}"
+          echo ""
+          echo "--- Body ---"
+          if [[ -f /tmp/release_body.md ]]; then
+            cat /tmp/release_body.md
+          else
+            echo "(no body file generated)"
+          fi
+          echo ""
+          echo "============================================"
+
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: /tmp/release_body.md
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # Run tests
+  # ============================================================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [check-version]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-features
+
+  # ============================================================================
+  # Build for all platforms
+  # ============================================================================
   build:
     name: Build ${{ matrix.target }}
-    # Skip if PR was closed without merge
-    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     runs-on: ${{ matrix.os }}
+    needs: [check-version]
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ===========================================
           # Linux glibc (standard distributions)
-          # ===========================================
-
-          # Linux x86_64 (glibc) - most common servers
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: llmnet-linux-x86_64-gnu
 
-          # Linux aarch64 (glibc) - ARM servers, DGX, Graviton
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: llmnet-linux-aarch64-gnu
             cross: true
 
-          # ===========================================
           # Linux musl (static binaries, Alpine, containers)
-          # ===========================================
-
-          # Linux x86_64 musl - static binary, works everywhere
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             artifact: llmnet-linux-x86_64-musl
             cross: true
 
-          # Linux aarch64 musl - static ARM binary
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             artifact: llmnet-linux-aarch64-musl
             cross: true
 
-          # ===========================================
           # macOS
-          # ===========================================
-
-          # macOS x86_64 (Intel Macs)
           - target: x86_64-apple-darwin
             os: macos-15
             artifact: llmnet-darwin-x86_64
 
-          # macOS aarch64 (Apple Silicon M1/M2/M3)
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: llmnet-darwin-aarch64
 
-          # ===========================================
           # Linux ARM 32-bit (Raspberry Pi, embedded)
-          # ===========================================
-
-          # ARMv7 (Raspberry Pi 2/3/4 32-bit mode)
           - target: armv7-unknown-linux-gnueabihf
             os: ubuntu-latest
             artifact: llmnet-linux-armv7-gnueabihf
             cross: true
 
-          # ARMv7 musl (static, for containers)
           - target: armv7-unknown-linux-musleabihf
             os: ubuntu-latest
             artifact: llmnet-linux-armv7-musleabihf
             cross: true
 
-          # ===========================================
-          # BSD (servers, firewalls, NAS)
-          # ===========================================
-
-          # FreeBSD x86_64
+          # BSD
           - target: x86_64-unknown-freebsd
             os: ubuntu-latest
             artifact: llmnet-freebsd-x86_64
@@ -106,6 +391,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -128,12 +415,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp target/${{ matrix.target }}/release/llmnet.exe dist/${{ matrix.artifact }}.exe
-          else
-            cp target/${{ matrix.target }}/release/llmnet dist/${{ matrix.artifact }}
-            chmod +x dist/${{ matrix.artifact }}
-          fi
+          cp target/${{ matrix.target }}/release/llmnet dist/${{ matrix.artifact }}
+          chmod +x dist/${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -142,79 +425,109 @@ jobs:
           path: dist/${{ matrix.artifact }}*
           if-no-files-found: error
 
-  # Run tests on the primary platforms
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all-features
-
-  # Create release on tag push, manual trigger, or merged version PR
+  # ============================================================================
+  # Create release
+  # ============================================================================
   release:
     name: Create Release
-    needs: [build, test]
-    runs-on: ubuntu-latest
-    # Release if:
-    # - Tag push starting with 'v'
-    # - Manual workflow dispatch
-    # - Merged PR from a branch starting with 'v' (version branch)
+    needs: [build, test, check-version, generate-notes]
+    # Allow generate-notes to be skipped (for 'main' builds or skip_ai_notes)
     if: |
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.merged == true &&
-       startsWith(github.event.pull_request.head.ref, 'v'))
+      always() &&
+      needs.build.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.check-version.result == 'success'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch || github.ref }}
 
-      - name: Download all artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Download release notes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+        continue-on-error: true
 
       - name: Prepare release assets
         run: |
           mkdir -p release
           for dir in artifacts/*/; do
+            # Skip release-notes directory
+            [[ "$dir" == *"release-notes"* ]] && continue
             for file in "$dir"*; do
-              if [ -f "$file" ]; then
-                cp "$file" release/
-              fi
+              [ -f "$file" ] && cp "$file" release/
             done
           done
+          echo "Release assets:"
           ls -la release/
 
-      - name: Determine version
-        id: version
+      - name: Determine release metadata
+        id: meta
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.tag }}" ]]; then
-            # Manual trigger with specified tag
-            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Tag push
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.ref }}" == v* ]]; then
-            # Merged PR from version branch (e.g., v1.0.0)
-            echo "version=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          VERSION="${{ needs.check-version.outputs.version }}"
+          TAG="${{ needs.check-version.outputs.tag }}"
+
+          # Title priority: input > AI-generated > default
+          if [[ -n "${{ inputs.title }}" ]]; then
+            TITLE="${{ inputs.title }}"
+          elif [[ -n "${{ needs.generate-notes.outputs.title }}" ]]; then
+            TITLE="${{ needs.generate-notes.outputs.title }}"
           else
-            # Fallback to dev version
-            echo "version=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+            TITLE="Release $TAG"
           fi
+
+          # Body priority: input > AI-generated > auto-generate
+          if [[ -n "${{ inputs.body }}" ]]; then
+            echo "${{ inputs.body }}" > /tmp/release_body.md
+          elif [[ -f "notes/release_body.md" ]]; then
+            cp notes/release_body.md /tmp/release_body.md
+          else
+            echo "Release $TAG" > /tmp/release_body.md
+          fi
+
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # Determine if prerelease
+          if [[ "$VERSION" == "main" || "$VERSION" == *"-"* || "$VERSION" == *"alpha"* || "$VERSION" == *"beta"* || "$VERSION" == *"rc"* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Release metadata:"
+          echo "  Version: $VERSION"
+          echo "  Tag: $TAG"
+          echo "  Title: $TITLE"
+          echo "  Prerelease: $(if [[ \"$VERSION\" == \"main\" || \"$VERSION\" == *\"-\"* ]]; then echo true; else echo false; fi)"
+
+      - name: Delete existing release if overwriting
+        if: needs.check-version.outputs.tag_exists == 'true' && inputs.overwrite == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Deleting existing release ${{ steps.meta.outputs.tag }}..."
+          gh release delete "${{ steps.meta.outputs.tag }}" --yes || true
+          git push --delete origin "${{ steps.meta.outputs.tag }}" || true
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          body_path: /tmp/release_body.md
           draft: false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           files: release/*
-          generate_release_notes: true
+          make_latest: ${{ steps.meta.outputs.prerelease != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
