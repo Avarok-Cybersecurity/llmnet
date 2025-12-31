@@ -540,46 +540,59 @@ async fn stream_pipeline_logs(
     };
 
     // Find the worker node that has this pipeline
-    // Parse from endpoints or look up node assignments
-    let worker_addr = match &pipeline.status {
-        Some(status) if !status.endpoints.is_empty() => {
-            // Parse worker address from endpoint (e.g., "http://192.168.1.100:8080")
-            if let Some(endpoint) = status.endpoints.first() {
-                // Extract host:port, convert to worker port (typically endpoint is pipeline port, worker is on different port)
-                // For now, we'll look up the node directly
-                None
-            } else {
-                None
+    // First try pipeline tracking, then fallback to checking which worker has the container
+    let nodes = state.controller.list_nodes();
+
+    // Method 1: Check node pipeline tracking
+    let found_node = nodes.iter().find(|n| {
+        n.status
+            .as_ref()
+            .map(|s| {
+                s.pipelines
+                    .iter()
+                    .any(|p| p.namespace == namespace && p.name == name)
+            })
+            .unwrap_or(false)
+    });
+
+    let worker_url = if let Some(node) = found_node {
+        format!("http://{}:{}", node.spec.address, node.spec.port)
+    } else {
+        // Method 2: Query each node to see if it has the container
+        // This is a fallback for when pipeline tracking isn't working
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+
+        let mut found_worker: Option<String> = None;
+        for node in &nodes {
+            let url = format!(
+                "http://{}:{}/v1/containers",
+                node.spec.address, node.spec.port
+            );
+            if let Ok(resp) = client.get(&url).send().await {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(containers) = body["containers"].as_array() {
+                        if containers
+                            .iter()
+                            .any(|c| c.as_str() == Some(&container_name))
+                        {
+                            found_worker =
+                                Some(format!("http://{}:{}", node.spec.address, node.spec.port));
+                            break;
+                        }
+                    }
+                }
             }
         }
-        _ => None,
-    };
 
-    // If we couldn't get worker from endpoint, find node that has this pipeline allocated
-    let worker_url = if let Some(addr) = worker_addr {
-        addr
-    } else {
-        // Search nodes for one that has this pipeline
-        let nodes = state.controller.list_nodes();
-        let found_node = nodes.into_iter().find(|n| {
-            n.status
-                .as_ref()
-                .map(|s| {
-                    s.pipelines
-                        .iter()
-                        .any(|p| p.namespace == namespace && p.name == name)
-                })
-                .unwrap_or(false)
-        });
-
-        match found_node {
-            Some(node) => {
-                format!("http://{}:{}", node.spec.address, node.spec.port)
-            }
+        match found_worker {
+            Some(url) => url,
             None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    Body::from("Pipeline not scheduled to any worker"),
+                    Body::from("Pipeline not scheduled to any worker or container not found"),
                 )
                     .into_response();
             }
