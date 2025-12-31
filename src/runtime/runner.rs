@@ -120,7 +120,14 @@ impl RunnerManager {
             return Ok(process.endpoint.clone());
         }
 
-        let port = self.next_available_port(config.runner.default_port().unwrap_or(8080));
+        // Use docker.port if specified, otherwise runner default, otherwise 8080
+        let default_port = config
+            .docker
+            .as_ref()
+            .and_then(|d| d.port)
+            .or_else(|| config.runner.default_port())
+            .unwrap_or(8080);
+        let port = self.next_available_port(default_port);
         let host = &self.default_host;
 
         let (child, container_name, endpoint) = match config.runner {
@@ -585,6 +592,51 @@ impl RunnerManager {
     /// List all running models
     pub fn list_running(&self) -> Vec<String> {
         self.processes.iter().map(|p| p.key().clone()).collect()
+    }
+
+    /// Get container name for a model (if it's a Docker runner)
+    pub fn get_container_name(&self, model_name: &str) -> Option<String> {
+        self.processes
+            .get(model_name)
+            .and_then(|p| p.container_name.clone())
+    }
+
+    /// List all Docker container names
+    pub fn list_containers(&self) -> Vec<String> {
+        self.processes
+            .iter()
+            .filter_map(|p| p.container_name.clone())
+            .collect()
+    }
+
+    /// Stream container logs (returns a child process whose stdout can be read)
+    pub async fn stream_container_logs(
+        &self,
+        container_name: &str,
+        follow: bool,
+        tail: Option<usize>,
+    ) -> Result<tokio::process::Child, RunnerError> {
+        let mut args = vec!["logs".to_string()];
+
+        if follow {
+            args.push("--follow".to_string());
+        }
+
+        if let Some(n) = tail {
+            args.push("--tail".to_string());
+            args.push(n.to_string());
+        }
+
+        args.push(container_name.to_string());
+
+        let child = Command::new("docker")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| RunnerError::SpawnError(format!("Failed to run docker logs: {}", e)))?;
+
+        Ok(child)
     }
 
     /// Graceful shutdown of all runners

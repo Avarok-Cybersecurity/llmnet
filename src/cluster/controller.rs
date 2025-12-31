@@ -13,7 +13,7 @@ use dashmap::DashMap;
 use tokio::sync::RwLock;
 use thiserror::Error;
 
-use super::node::{Node, NodePhase, NodeStatus};
+use super::node::{Node, NodePhase, NodePipelineInfo, NodeStatus, ReplicaStatus};
 use super::pipeline::{Pipeline, PipelineStatus};
 use super::resources::{Namespace, LabelSelector};
 use super::HEARTBEAT_INTERVAL_SECS;
@@ -221,6 +221,65 @@ impl ClusterController {
                 }
             }
         }
+    }
+
+    /// Add a pipeline to a node's tracked pipelines
+    pub fn add_pipeline_to_node(
+        &self,
+        node_name: &str,
+        namespace: &str,
+        name: &str,
+        port: u16,
+    ) -> Result<(), ControllerError> {
+        let mut node = self
+            .nodes
+            .get_mut(node_name)
+            .ok_or_else(|| ControllerError::NodeNotFound(node_name.to_string()))?;
+
+        let status = node.status.get_or_insert_with(|| {
+            NodeStatus::new(
+                super::node::NodeCapacity::default(),
+                super::node::NodeInfo::from_system(),
+            )
+        });
+
+        // Check if already tracked
+        let already_exists = status
+            .pipelines
+            .iter()
+            .any(|p| p.namespace == namespace && p.name == name);
+
+        if !already_exists {
+            status.pipelines.push(NodePipelineInfo {
+                name: name.to_string(),
+                namespace: namespace.to_string(),
+                port,
+                status: ReplicaStatus::Running,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Remove a pipeline from a node's tracked pipelines
+    pub fn remove_pipeline_from_node(
+        &self,
+        node_name: &str,
+        namespace: &str,
+        name: &str,
+    ) -> Result<(), ControllerError> {
+        let mut node = self
+            .nodes
+            .get_mut(node_name)
+            .ok_or_else(|| ControllerError::NodeNotFound(node_name.to_string()))?;
+
+        if let Some(status) = &mut node.status {
+            status
+                .pipelines
+                .retain(|p| !(p.namespace == namespace && p.name == name));
+        }
+
+        Ok(())
     }
 
     // =========================================================================

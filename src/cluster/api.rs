@@ -7,14 +7,18 @@
 //! - Status: cluster health
 
 use axum::{
-    extract::{Path, State},
+    body::Body,
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch, post},
     Json, Router,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio_util::io::ReaderStream;
+use tracing::warn;
 
 use super::{
     controller::ClusterController,
@@ -73,6 +77,11 @@ pub fn create_control_plane_router(state: ControlPlaneState) -> Router {
         .route(
             "/v1/namespaces/{namespace}/pipelines/{name}/autoscaling",
             get(get_autoscaling).put(update_autoscaling),
+        )
+        // Pipeline logs
+        .route(
+            "/v1/namespaces/{namespace}/pipelines/{name}/logs",
+            get(stream_pipeline_logs),
         )
         // Nodes
         .route("/v1/nodes", get(list_nodes).post(register_node))
@@ -462,6 +471,156 @@ async fn uncordon_node(
 async fn list_namespaces(State(state): State<ControlPlaneState>) -> impl IntoResponse {
     let namespaces = state.controller.list_namespaces();
     Json(ResourceList::new("NamespaceList", namespaces))
+}
+
+// ============================================================================
+// Pipeline Logs
+// ============================================================================
+
+/// Query parameters for logs endpoint
+#[derive(Debug, Deserialize)]
+pub struct LogsQuery {
+    /// Follow log output (like tail -f)
+    #[serde(default)]
+    pub follow: bool,
+    /// Number of lines to show from the end
+    #[serde(default = "default_tail")]
+    pub tail: usize,
+    /// Container name (optional, defaults to first docker container in composition)
+    pub container: Option<String>,
+}
+
+fn default_tail() -> usize {
+    100
+}
+
+/// Stream logs for a pipeline's containers
+async fn stream_pipeline_logs(
+    State(state): State<ControlPlaneState>,
+    Path((namespace, name)): Path<(String, String)>,
+    Query(params): Query<LogsQuery>,
+) -> impl IntoResponse {
+    // Get the pipeline
+    let pipeline = match state.controller.get_pipeline(&namespace, &name) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Body::from(format!("Pipeline '{}/{}' not found", namespace, name)),
+            )
+                .into_response();
+        }
+    };
+
+    // Find the container name from the composition
+    let container_name = if let Some(name) = params.container {
+        name
+    } else {
+        // Find first model with docker config and a name
+        let mut found: Option<String> = None;
+        for (_model_name, model_def) in &pipeline.spec.composition.models {
+            let config = model_def.to_config();
+            if let Some(docker) = &config.docker {
+                if let Some(name) = &docker.name {
+                    found = Some(name.clone());
+                    break;
+                }
+            }
+        }
+        match found {
+            Some(n) => n,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Body::from("No docker container name found in composition. Specify ?container=NAME"),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    // Find the worker node that has this pipeline
+    // Parse from endpoints or look up node assignments
+    let worker_addr = match &pipeline.status {
+        Some(status) if !status.endpoints.is_empty() => {
+            // Parse worker address from endpoint (e.g., "http://192.168.1.100:8080")
+            if let Some(endpoint) = status.endpoints.first() {
+                // Extract host:port, convert to worker port (typically endpoint is pipeline port, worker is on different port)
+                // For now, we'll look up the node directly
+                None
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    // If we couldn't get worker from endpoint, find node that has this pipeline allocated
+    let worker_url = if let Some(addr) = worker_addr {
+        addr
+    } else {
+        // Search nodes for one that has this pipeline
+        let nodes = state.controller.list_nodes();
+        let found_node = nodes.into_iter().find(|n| {
+            n.status
+                .as_ref()
+                .map(|s| {
+                    s.pipelines
+                        .iter()
+                        .any(|p| p.namespace == namespace && p.name == name)
+                })
+                .unwrap_or(false)
+        });
+
+        match found_node {
+            Some(node) => {
+                format!("http://{}:{}", node.spec.address, node.spec.port)
+            }
+            None => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Body::from("Pipeline not scheduled to any worker"),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    // Proxy request to worker
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v1/containers/{}/logs?follow={}&tail={}",
+        worker_url, container_name, params.follow, params.tail
+    );
+
+    match client.get(&url).send().await {
+        Ok(response) => {
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return (
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    Body::from(body),
+                )
+                    .into_response();
+            }
+
+            // Stream the response body
+            let stream = response.bytes_stream().map(|result| {
+                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            });
+            let body = Body::from_stream(stream);
+            (StatusCode::OK, body).into_response()
+        }
+        Err(e) => {
+            warn!("Failed to proxy logs request to {}: {}", worker_url, e);
+            (
+                StatusCode::BAD_GATEWAY,
+                Body::from(format!("Failed to connect to worker: {}", e)),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]

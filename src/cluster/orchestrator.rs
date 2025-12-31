@@ -214,6 +214,15 @@ async fn schedule_pipeline(
                         if let Some(endpoint) = ar.endpoint {
                             endpoints.push(endpoint);
                         }
+                        // Track pipeline on this node
+                        if let Err(e) = controller.add_pipeline_to_node(
+                            &node_name,
+                            &pipeline.metadata.namespace,
+                            &pipeline.metadata.name,
+                            pipeline.spec.port,
+                        ) {
+                            warn!("Failed to track pipeline on node {}: {}", node_name, e);
+                        }
                         info!(
                             "Worker {} accepted assignment for {}/{}",
                             node_name, pipeline.metadata.namespace, pipeline.metadata.name

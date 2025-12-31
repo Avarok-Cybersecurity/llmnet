@@ -1,11 +1,15 @@
 use axum::{
-    extract::{Path, State},
+    body::Body,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio_util::io::ReaderStream;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::client::Message;
@@ -332,6 +336,106 @@ pub async fn chat_completions(
     (response_headers, Json(response))
 }
 
+/// Query parameters for logs endpoint
+#[derive(Debug, Deserialize)]
+pub struct LogsQuery {
+    /// Follow log output (like tail -f)
+    #[serde(default)]
+    pub follow: bool,
+    /// Number of lines to show from the end
+    #[serde(default = "default_tail")]
+    pub tail: usize,
+}
+
+fn default_tail() -> usize {
+    100
+}
+
+/// Stream container logs
+pub async fn stream_logs(
+    State(state): State<AppState>,
+    Path(container): Path<String>,
+    Query(params): Query<LogsQuery>,
+) -> impl IntoResponse {
+    let manager = match &state.runner_manager {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Body::from("Runner manager not available"),
+            )
+                .into_response();
+        }
+    };
+
+    // Check if container exists in our tracked processes
+    let containers = manager.list_containers();
+    if !containers.contains(&container) {
+        return (
+            StatusCode::NOT_FOUND,
+            Body::from(format!("Container '{}' not found", container)),
+        )
+            .into_response();
+    }
+
+    // Start streaming logs
+    match manager
+        .stream_container_logs(&container, params.follow, Some(params.tail))
+        .await
+    {
+        Ok(mut child) => {
+            // Merge stdout and stderr into a single stream
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+
+            match (stdout, stderr) {
+                (Some(stdout), Some(stderr)) => {
+                    // Create streams from both
+                    let stdout_stream = ReaderStream::new(stdout);
+                    let stderr_stream = ReaderStream::new(stderr);
+
+                    // Merge the streams
+                    let merged = futures::stream::select(stdout_stream, stderr_stream);
+
+                    let body = Body::from_stream(merged);
+                    (StatusCode::OK, body).into_response()
+                }
+                (Some(stdout), None) => {
+                    let stream = ReaderStream::new(stdout);
+                    let body = Body::from_stream(stream);
+                    (StatusCode::OK, body).into_response()
+                }
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Body::from("Failed to capture log output"),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => {
+            error!("Failed to stream logs for '{}': {}", container, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Body::from(format!("Failed to stream logs: {}", e)),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// List available containers
+pub async fn list_containers(State(state): State<AppState>) -> impl IntoResponse {
+    let containers = state
+        .runner_manager
+        .as_ref()
+        .map(|m| m.list_containers())
+        .unwrap_or_default();
+
+    Json(serde_json::json!({
+        "containers": containers
+    }))
+}
+
 /// Create the Axum router
 pub fn create_router(state: AppState) -> Router {
     Router::new()
@@ -344,6 +448,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/runners/{name}", delete(stop_runner))
         // Pipeline assignment endpoint (control plane -> worker)
         .route("/v1/assignments", post(receive_assignment))
+        // Container logs endpoints
+        .route("/v1/containers", get(list_containers))
+        .route("/v1/containers/{container}/logs", get(stream_logs))
         .with_state(state)
 }
 

@@ -397,6 +397,37 @@ impl ControlPlaneClient {
         let namespaces: Vec<serde_json::Value> = serde_json::from_value(body["items"].clone())?;
         Ok(namespaces)
     }
+
+    /// Stream logs for a pipeline
+    /// Returns a Response that can be streamed
+    pub async fn stream_logs(
+        &self,
+        namespace: &str,
+        name: &str,
+        follow: bool,
+        tail: usize,
+    ) -> CommandResult<reqwest::Response> {
+        let path = format!(
+            "/v1/namespaces/{}/pipelines/{}/logs?follow={}&tail={}",
+            namespace, name, follow, tail
+        );
+
+        let resp = self
+            .build_request(reqwest::Method::GET, &path)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CommandError::Server(format!(
+                "Failed to stream logs ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(resp)
+    }
 }
 
 #[cfg(test)]

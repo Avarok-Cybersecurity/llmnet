@@ -358,17 +358,40 @@ fn run_context(
 }
 
 async fn run_logs(
-    _config: &context::Config,
+    config: &context::Config,
     args: llmnet::cli::LogsArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Implement log streaming
-    warn!(
-        "Log streaming not yet implemented for pipeline '{}/{}'",
-        args.namespace, args.name
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let client = ControlPlaneClient::from_context(config)?;
+
+    info!(
+        "Streaming logs for pipeline '{}/{}' (follow={}, tail={})",
+        args.namespace, args.name, args.follow, args.tail
     );
-    if args.follow {
-        warn!("Follow mode not yet implemented");
+
+    let response = client
+        .stream_logs(&args.namespace, &args.name, args.follow, args.tail)
+        .await?;
+
+    // Stream the response body to stdout
+    let mut stream = response.bytes_stream();
+    let mut stdout = tokio::io::stdout();
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                stdout.write_all(&bytes).await?;
+                stdout.flush().await?;
+            }
+            Err(e) => {
+                error!("Error reading log stream: {}", e);
+                break;
+            }
+        }
     }
+
     Ok(())
 }
 

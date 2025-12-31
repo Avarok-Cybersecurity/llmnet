@@ -121,6 +121,11 @@ pub struct DockerConfig {
     /// Container restart policy: "no", "always", "unless-stopped", "on-failure"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restart: Option<String>,
+
+    /// Port to expose for the container (default: 8080)
+    /// This is the port the model server will listen on inside the container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 fn default_network() -> String {

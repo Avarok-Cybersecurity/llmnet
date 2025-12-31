@@ -8,6 +8,7 @@
         "name": "vllm-nvfp4",
         "gpus": "all",
         "ipc": "host",
+        "port": 8090,
         "volumes": ["~/.cache/huggingface:/root/.cache/huggingface"]
       }
     }
