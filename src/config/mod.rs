@@ -3,6 +3,7 @@ pub mod composition;
 pub mod functions;
 pub mod models;
 pub mod secrets;
+pub mod validation;
 
 pub use architecture::{
     ArchitectureNode, FailureAction, HookConfig, HookMode, NodeHooks, OutputTarget,
@@ -13,6 +14,10 @@ pub use composition::{
 pub use functions::{FunctionError, FunctionExecutor, FunctionResult, FunctionType, HttpMethod};
 pub use models::{DockerModel, ExternalModel, HuggingfaceModel, ModelDefinition};
 pub use secrets::{SecretError, SecretSource, SecretsManager};
+pub use validation::{
+    known_devices, validate_model_for_device, validate_models, DeviceProfile, ValidationMessage,
+    ValidationResult, ValidationSeverity,
+};
 
 use std::path::Path;
 use thiserror::Error;

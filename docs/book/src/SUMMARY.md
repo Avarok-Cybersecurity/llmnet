@@ -36,6 +36,13 @@
 - [Multiplication Calculator with Hooks](./examples/multiplication-calculator.md)
 - [OpenRouter Integration](./examples/openrouter.md)
 
+# Edge Devices
+
+- [Overview](./edge-devices/overview.md)
+- [NVIDIA Jetson](./edge-devices/jetson.md)
+- [Raspberry Pi](./edge-devices/raspberry-pi.md)
+- [Model Selection](./edge-devices/model-selection.md)
+
 # Advanced Topics
 
 - [Hook Execution](./advanced/hook-execution.md)

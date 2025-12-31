@@ -21,6 +21,7 @@ use tracing::warn;
 
 use super::{
     controller::ClusterController,
+    health_checker::{get_cluster_health_summary, ClusterHealthSummary},
     node::{Node, NodeScore, NodeStatus},
     pipeline::{AutoscalingConfig, Pipeline},
     resources::{OperationStatus, ResourceList},
@@ -109,9 +110,11 @@ async fn health_check() -> impl IntoResponse {
 
 async fn cluster_status(State(state): State<ControlPlaneState>) -> impl IntoResponse {
     let stats = state.controller.cluster_stats();
+    let health = get_cluster_health_summary(&state.controller);
     Json(ClusterStatusResponse {
         status: "ok".to_string(),
         stats,
+        health,
     })
 }
 
@@ -119,6 +122,7 @@ async fn cluster_status(State(state): State<ControlPlaneState>) -> impl IntoResp
 struct ClusterStatusResponse {
     status: String,
     stats: ClusterStats,
+    health: ClusterHealthSummary,
 }
 
 // ============================================================================
